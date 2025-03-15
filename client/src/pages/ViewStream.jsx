@@ -24,6 +24,9 @@ const ViewStream = () => {
   // Generate or retrieve viewer ID
   const viewerId = localStorage.getItem('viewerId') || uuidv4();
   
+  // API URL from environment variables
+  const API_URL = import.meta.env.VITE_API_URL;
+  
   // Save the user ID to localStorage if it doesn't exist
   useEffect(() => {
     if (!localStorage.getItem('viewerId')) {
@@ -36,7 +39,7 @@ const ViewStream = () => {
     const fetchStreamInfo = async () => {
       try {
         // Find the stream by roomId
-        const response = await axios.get(`http://localhost:5000/api/streams?roomId=${roomId}`);
+        const response = await axios.get(`${API_URL}/api/streams?roomId=${roomId}`);
         if (response.data && response.data.length > 0) {
           setStreamInfo(response.data[0]);
           setHostId(response.data[0].hostId);
@@ -53,7 +56,7 @@ const ViewStream = () => {
     };
     
     fetchStreamInfo();
-  }, [roomId]);
+  }, [roomId, API_URL]);
 
   // Set up WebRTC connection
   useEffect(() => {
@@ -75,9 +78,9 @@ const ViewStream = () => {
     }, 15000);
 
     try {
-      // Connect to socket server with explicit URL
-      console.log("Connecting to socket server...");
-      socketRef.current = io('http://localhost:5000');
+      // Connect to socket server with API URL from environment variables
+      console.log("Connecting to socket server at:", API_URL);
+      socketRef.current = io(API_URL);
       
       // Register viewer ID with socket
       console.log("Registering viewer ID:", viewerId);
@@ -230,7 +233,7 @@ const ViewStream = () => {
       setConnecting(false);
       clearTimeout(connectionTimeout);
     }
-  }, [roomId, viewerId, hostId]); // Removed 'connected' from dependencies
+  }, [roomId, viewerId, hostId, API_URL]); // Added API_URL to dependencies
   
   // Function to retry connection
   const retryConnection = () => {
@@ -250,7 +253,7 @@ const ViewStream = () => {
     }
     
     // Re-fetch stream info, which will trigger the connection setup effect
-    axios.get(`http://localhost:5000/api/streams?roomId=${roomId}`)
+    axios.get(`${API_URL}/api/streams?roomId=${roomId}`)
       .then(response => {
         if (response.data && response.data.length > 0) {
           setStreamInfo(response.data[0]);
@@ -331,6 +334,7 @@ const ViewStream = () => {
       {/* Debug info - useful for troubleshooting */}
       <div className="mt-4 p-4 bg-gray-900 rounded text-xs">
         <p>Debug Info:</p>
+        <p>API URL: {API_URL}</p>
         <p>Room ID: {roomId}</p>
         <p>Host ID: {hostId || 'Unknown'}</p>
         <p>Connected: {connected ? 'Yes' : 'No'}</p>
