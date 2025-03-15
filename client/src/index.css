@@ -70,3 +70,16 @@ button:focus-visible {
     background-color: #f9f9f9;
   }
 }
+
+.aspect-video {
+  position: relative;
+  min-height: 300px;
+  background-color: black;
+}
+
+video {
+  display: block;
+  width: 100%;
+  height: 100%;
+  background-color: #000;
+}

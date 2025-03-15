@@ -25,4 +25,5 @@ const StreamSchema = new mongoose.Schema({
   }
 });
 
-module.exports = mongoose.model('Stream', StreamSchema); 
+// Check if the model exists before compiling it
+module.exports = mongoose.models.Stream || mongoose.model('Stream', StreamSchema); 

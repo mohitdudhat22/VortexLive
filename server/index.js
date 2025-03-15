@@ -4,6 +4,7 @@ const cors = require('cors');
 const mongoose = require('mongoose');
 const socketIo = require('socket.io');
 const dotenv = require('dotenv');
+const Stream = require('./models/Stream');
 
 dotenv.config();
 
@@ -47,9 +48,49 @@ io.on('connection', (socket) => {
     });
   });
 
-  // Signal handling for WebRTC
-  socket.on('signal', ({ userId, roomId, signal }) => {
-    io.to(roomId).emit('user-signal', { userId, signal });
+  // Signal handling for WebRTC - FIX HERE
+  socket.on('signal', ({ userId, roomId, signal, targetUserId }) => {
+    console.log(`Signal from ${userId} to ${targetUserId || 'room'} in ${roomId}`);
+    
+    // If targetUserId is provided, send signal directly to that user
+    if (targetUserId) {
+      // Find the target user's socket and send the signal only to them
+      const clients = io.sockets.adapter.rooms.get(roomId);
+      if (clients) {
+        for (const clientId of clients) {
+          const clientSocket = io.sockets.sockets.get(clientId);
+          if (clientSocket && clientSocket.userId === targetUserId) {
+            clientSocket.emit('user-signal', { userId, signal });
+            return;
+          }
+        }
+      }
+    }
+    
+    // Otherwise, send to all other users in the room (excluding sender)
+    socket.to(roomId).emit('user-signal', { userId, signal });
+  });
+  
+  // Store userId in socket object for later retrieval
+  socket.on('register-user', ({ userId }) => {
+    socket.userId = userId;
+    console.log(`Registered socket ${socket.id} for user ${userId}`);
+  });
+
+  // Add this to your Socket.io event handlers
+  socket.on('get-host-id', async ({ roomId }) => {
+    try {
+      // Get the host ID for this room from the database
+      const stream = await Stream.findOne({ roomId, active: true });
+      
+      if (stream) {
+        socket.emit('host-id', stream.hostId);
+      } else {
+        console.log(`No active stream found for room ${roomId}`);
+      }
+    } catch (error) {
+      console.error('Error getting host ID:', error);
+    }
   });
 });
 
