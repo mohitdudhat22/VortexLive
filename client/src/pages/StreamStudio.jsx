@@ -4,6 +4,7 @@ import axios from 'axios';
 import { v4 as uuidv4 } from 'uuid';
 import io from 'socket.io-client';
 import Peer from 'simple-peer';
+import ChatPanel from '../components/ChatPanel';
 
 const StreamStudio = () => {
   const [title, setTitle] = useState('');
@@ -524,24 +525,14 @@ const StreamStudio = () => {
             </div>
           </div>
           
-          <div className="bg-gray-800 rounded-lg p-4">
-            <h3 className="text-lg font-semibold mb-2">Stream Information</h3>
-            <p className="text-gray-300 mb-1">Room ID: {streamData?.roomId}</p>
-            <p className="text-gray-300">Share this link with others to join your stream:</p>
-            <div className="bg-gray-700 rounded p-2 mt-2 flex justify-between">
-              <code className="text-sm text-gray-300">
-                {import.meta.env.VITE_CLIENT_URL}/stream/{streamData?.roomId}
-              </code>
-              <button
-                onClick={() => {
-                  navigator.clipboard.writeText(`${import.meta.env.VITE_CLIENT_URL}/stream/${streamData?.roomId}`);
-                  alert('Link copied to clipboard!');
-                }}
-                className="text-blue-400 hover:text-blue-300 text-sm"
-              >
-                Copy
-              </button>
-            </div>
+          <div className="bg-gray-800 rounded-lg">
+            <ChatPanel 
+              socket={socketRef.current}
+              roomId={streamData?.roomId}
+              userId={hostId}
+              username={`Host: ${title.split(' ')[0]}`}
+              isHost={true}
+            />
           </div>
         </div>
       )}

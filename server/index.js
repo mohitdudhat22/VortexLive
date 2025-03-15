@@ -29,6 +29,10 @@ mongoose.connect(process.env.MONGO_URI || 'mongodb://localhost:27017/streamingAp
   .then(() => console.log('MongoDB connected'))
   .catch(err => console.error('MongoDB connection error:', err));
 
+// In-memory storage for chat messages and muted users
+const chatMessages = {};
+const mutedUsers = {};
+
 // Socket.io logic for handling WebRTC signaling
 io.on('connection', (socket) => {
   console.log(`User connected: ${socket.id}`);
@@ -90,6 +94,68 @@ io.on('connection', (socket) => {
       }
     } catch (error) {
       console.error('Error getting host ID:', error);
+    }
+  });
+
+  // Chat messaging
+  socket.on('send-chat-message', (messageData) => {
+    // Broadcast message to everyone in the room except sender
+    socket.to(messageData.roomId).emit('chat-message', messageData);
+    
+    // Store chat messages in memory (optional - can be expanded to database)
+    if (!chatMessages[messageData.roomId]) {
+      chatMessages[messageData.roomId] = [];
+    }
+    
+    // Keep only last 100 messages per room
+    chatMessages[messageData.roomId].push(messageData);
+    if (chatMessages[messageData.roomId].length > 100) {
+      chatMessages[messageData.roomId].shift();
+    }
+  });
+
+  // Send chat history when user joins room
+  socket.on('get-chat-history', ({ roomId }) => {
+    if (chatMessages[roomId]) {
+      socket.emit('chat-history', chatMessages[roomId]);
+    }
+  });
+
+  // Message reactions
+  socket.on('add-reaction', (reactionData) => {
+    socket.to(reactionData.roomId).emit('message-reaction', reactionData);
+  });
+
+  // Message deletion
+  socket.on('delete-message', ({ messageId, roomId, userId }) => {
+    // Optionally verify that the user is allowed to delete this message
+    // For example, check if user is host or message author
+    
+    // If using DB storage, delete from database here
+    
+    // Notify all clients about deleted message
+    io.to(roomId).emit('message-deleted', messageId);
+    
+    // Update in-memory storage if using
+    if (chatMessages[roomId]) {
+      chatMessages[roomId] = chatMessages[roomId].filter(msg => msg.id !== messageId);
+    }
+  });
+
+  // User muting
+  socket.on('mute-user', async ({ roomId, userId, targetUserId, targetUsername }) => {
+    // Check if requester is the host
+    const stream = await Stream.findOne({ roomId, hostId: userId });
+    if (stream) {
+      // Store muted user in a set or database
+      if (!mutedUsers[roomId]) {
+        mutedUsers[roomId] = new Set();
+      }
+      mutedUsers[roomId].add(targetUserId);
+      
+      // Optional: Broadcast to all moderators that user was muted
+      // This could be used to sync mute state across host devices
+      socket.to(roomId).emit('user-muted', { targetUserId, targetUsername });
     }
   });
 });

@@ -11,6 +11,7 @@ import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { AspectRatio } from "@/components/ui/aspect-ratio";
 import { Loader2 } from "lucide-react";
+import ChatPanel from '../components/ChatPanel';
 
 const ViewStream = () => {
   const [hostStream, setHostStream] = useState(null);
@@ -286,52 +287,67 @@ const ViewStream = () => {
         </Button>
       </div>
       
-      <Card>
-        <CardContent className="p-0">
-          <AspectRatio ratio={16/9} className="bg-black relative">
-            {/* Main video element */}
-            <video 
-              ref={videoRef} 
-              autoPlay 
-              playsInline
-              controls  
-              className="w-full h-full object-contain"
-            />
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="md:col-span-2">
+          <Card>
+            <CardContent className="p-0">
+              <AspectRatio ratio={16/9} className="bg-black relative">
+                {/* Main video element */}
+                <video 
+                  ref={videoRef} 
+                  autoPlay 
+                  playsInline
+                  controls  
+                  className="w-full h-full object-contain"
+                />
+                
+                {/* Connection status overlays */}
+                {connecting && (
+                  <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-70">
+                    <div className="text-center space-y-2">
+                      <Loader2 className="h-10 w-10 animate-spin mx-auto" />
+                      <p className="text-lg">Connecting to stream...</p>
+                    </div>
+                  </div>
+                )}
+                
+                {connectionError && (
+                  <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-70">
+                    <div className="text-center max-w-md p-6">
+                      <div className="text-red-500 text-5xl mb-3">⚠️</div>
+                      <p className="text-xl mb-4">{connectionError}</p>
+                      <Button variant="default" onClick={retryConnection}>
+                        Try Again
+                      </Button>
+                    </div>
+                  </div>
+                )}
+              </AspectRatio>
+            </CardContent>
             
-            {/* Connection status overlays */}
-            {connecting && (
-              <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-70">
-                <div className="text-center space-y-2">
-                  <Loader2 className="h-10 w-10 animate-spin mx-auto" />
-                  <p className="text-lg">Connecting to stream...</p>
+            {connected && (
+              <CardFooter className="flex flex-col items-start p-4">
+                <div className="flex items-center w-full">
+                  <Badge variant="destructive" className="mr-2">LIVE</Badge>
+                  <p className="text-muted-foreground">Room: {roomId}</p>
                 </div>
-              </div>
+                <h2 className="text-xl font-semibold mt-2">{streamInfo?.title}</h2>
+              </CardFooter>
             )}
-            
-            {connectionError && (
-              <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-70">
-                <div className="text-center max-w-md p-6">
-                  <div className="text-red-500 text-5xl mb-3">⚠️</div>
-                  <p className="text-xl mb-4">{connectionError}</p>
-                  <Button variant="default" onClick={retryConnection}>
-                    Try Again
-                  </Button>
-                </div>
-              </div>
-            )}
-          </AspectRatio>
-        </CardContent>
+          </Card>
+        </div>
         
-        {connected && (
-          <CardFooter className="flex flex-col items-start p-4">
-            <div className="flex items-center w-full">
-              <Badge variant="destructive" className="mr-2">LIVE</Badge>
-              <p className="text-muted-foreground">Room: {roomId}</p>
-            </div>
-            <h2 className="text-xl font-semibold mt-2">{streamInfo?.title}</h2>
-          </CardFooter>
-        )}
-      </Card>
+        {/* Add chat panel */}
+        <div>
+          <ChatPanel 
+            socket={socketRef.current}
+            roomId={roomId}
+            userId={viewerId}
+            username={`Viewer_${viewerId.substring(0, 4)}`}
+            isHost={false}
+          />
+        </div>
+      </div>
       
       {/* Debug info - useful for troubleshooting */}
       <Card className="bg-muted">
