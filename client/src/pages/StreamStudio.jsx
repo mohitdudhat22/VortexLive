@@ -13,6 +13,7 @@ const StreamStudio = () => {
   const [peers, setPeers] = useState([]);
   const [viewerCount, setViewerCount] = useState(0);
   const [cameraReady, setCameraReady] = useState(false);
+  const [videoError, setVideoError] = useState(null);
   
   const videoRef = useRef();
   const socketRef = useRef();
@@ -40,57 +41,126 @@ const StreamStudio = () => {
       localStorage.setItem('userId', hostId);
     }
   }, [hostId]);
+  
+  // Get camera on component mount
+  useEffect(() => {
+    if (!isStreaming && !stream) {
+      getVideoStream().catch(err => {
+        console.error("Initial camera setup failed:", err);
+        setVideoError("Could not access camera: " + err.message);
+      });
+    }
+  }, []);
 
   // This effect handles attaching the stream to the video element when both are available
   useEffect(() => {
     if (stream && videoRef.current) {
       console.log("Setting video source from useEffect...");
-      videoRef.current.srcObject = stream;
-      videoRef.current.muted = true;
+      // Try different methods to ensure video is displayed
       
-      const playPromise = videoRef.current.play();
-      if (playPromise !== undefined) {
-        playPromise
-          .then(() => {
-            console.log("Video playback started successfully from useEffect");
-            setCameraReady(true);
-          })
-          .catch(e => {
-            console.error("Error playing video from useEffect:", e);
-            // Try again with user interaction
-            const playButton = document.createElement('button');
-            playButton.textContent = 'Click to enable camera';
-            playButton.style.position = 'absolute';
-            playButton.style.top = '50%';
-            playButton.style.left = '50%';
-            playButton.style.transform = 'translate(-50%, -50%)';
-            playButton.style.zIndex = '1000';
-            playButton.style.padding = '10px 20px';
-            playButton.style.backgroundColor = '#3b82f6';
-            playButton.style.color = 'white';
-            playButton.style.border = 'none';
-            playButton.style.borderRadius = '5px';
-            playButton.style.cursor = 'pointer';
-            
-            const videoContainer = videoRef.current.parentElement;
-            if (videoContainer) {
-              videoContainer.style.position = 'relative';
-              videoContainer.appendChild(playButton);
+      try {
+        // Method 1: Direct srcObject assignment
+        videoRef.current.srcObject = stream;
+        videoRef.current.muted = true;
+        
+        // Add event listeners to track video loading
+        videoRef.current.onloadedmetadata = () => {
+          console.log("Video metadata loaded!");
+        };
+        
+        videoRef.current.onloadeddata = () => {
+          console.log("Video data loaded!");
+        };
+        
+        videoRef.current.onplaying = () => {
+          console.log("Video is now playing!");
+          setCameraReady(true);
+        };
+        
+        videoRef.current.onerror = (e) => {
+          console.error("Video element error:", e);
+          setVideoError("Video element error: " + e.target.error?.message || "Unknown error");
+        };
+        
+        // Force a play attempt
+        const playPromise = videoRef.current.play();
+        if (playPromise !== undefined) {
+          playPromise
+            .then(() => {
+              console.log("Video playback started successfully from useEffect");
+              setCameraReady(true);
+            })
+            .catch(e => {
+              console.error("Error playing video from useEffect:", e);
               
-              playButton.onclick = () => {
-                videoRef.current.play()
-                  .then(() => {
-                    console.log("Video playback started after user interaction");
-                    videoContainer.removeChild(playButton);
+              // Try Method 2: Create a fallback video element if the first one fails
+              console.log("Trying fallback method...");
+              const fallbackVideo = document.createElement('video');
+              fallbackVideo.autoplay = true;
+              fallbackVideo.playsInline = true;
+              fallbackVideo.muted = true;
+              fallbackVideo.width = videoRef.current.clientWidth;
+              fallbackVideo.height = videoRef.current.clientHeight;
+              fallbackVideo.style.width = '100%';
+              fallbackVideo.style.height = '100%';
+              fallbackVideo.style.objectFit = 'contain';
+              fallbackVideo.style.backgroundColor = 'black';
+              fallbackVideo.srcObject = stream;
+              
+              // Try to play the fallback
+              fallbackVideo.play()
+                .then(() => {
+                  console.log("Fallback video playing!");
+                  
+                  // Replace the original video
+                  if (videoRef.current && videoRef.current.parentNode) {
+                    videoRef.current.parentNode.replaceChild(fallbackVideo, videoRef.current);
+                    videoRef.current = fallbackVideo; // Update the ref
                     setCameraReady(true);
-                  })
-                  .catch(err => {
-                    console.error("Still can't play video after user interaction:", err);
-                    alert("Could not access camera. Please check your permissions and try again.");
-                  });
-              };
-            }
-          });
+                  }
+                })
+                .catch(fallbackErr => {
+                  console.error("Fallback also failed:", fallbackErr);
+                  
+                  // Final option: Create a button for user interaction
+                  const playButton = document.createElement('button');
+                  playButton.textContent = 'Click to enable camera';
+                  playButton.style.position = 'absolute';
+                  playButton.style.top = '50%';
+                  playButton.style.left = '50%';
+                  playButton.style.transform = 'translate(-50%, -50%)';
+                  playButton.style.zIndex = '1000';
+                  playButton.style.padding = '10px 20px';
+                  playButton.style.backgroundColor = '#3b82f6';
+                  playButton.style.color = 'white';
+                  playButton.style.border = 'none';
+                  playButton.style.borderRadius = '5px';
+                  playButton.style.cursor = 'pointer';
+                  
+                  const videoContainer = videoRef.current.parentElement;
+                  if (videoContainer) {
+                    videoContainer.style.position = 'relative';
+                    videoContainer.appendChild(playButton);
+                    
+                    playButton.onclick = () => {
+                      videoRef.current.play()
+                        .then(() => {
+                          console.log("Video playback started after user interaction");
+                          videoContainer.removeChild(playButton);
+                          setCameraReady(true);
+                        })
+                        .catch(err => {
+                          console.error("Still can't play video after user interaction:", err);
+                          setVideoError("Could not access camera. Please check your permissions and try again.");
+                        });
+                    };
+                  }
+                });
+            });
+        }
+      } catch (err) {
+        console.error("Error attaching stream to video:", err);
+        setVideoError("Error displaying camera: " + err.message);
       }
     }
   }, [stream, videoRef.current]);
@@ -99,14 +169,26 @@ const StreamStudio = () => {
     try {
       console.log("Requesting camera and microphone access...");
       
+      // Try a simpler constraint first just to get something working
       const mediaStream = await navigator.mediaDevices.getUserMedia({
-        video: true,
+        video: {
+          width: { ideal: 1280 },
+          height: { ideal: 720 }
+        },
         audio: true
       });
       
       console.log("Media stream obtained:", mediaStream);
       console.log("Video tracks:", mediaStream.getVideoTracks().length);
       console.log("Audio tracks:", mediaStream.getAudioTracks().length);
+      
+      // Check active state of tracks
+      const videoTrack = mediaStream.getVideoTracks()[0];
+      if (videoTrack) {
+        console.log("Video track settings:", videoTrack.getSettings());
+        console.log("Video track constraints:", videoTrack.getConstraints());
+        console.log("Video track active:", videoTrack.enabled);
+      }
       
       if (mediaStream.getVideoTracks().length === 0) {
         throw new Error("No video track available in the media stream");
@@ -115,10 +197,12 @@ const StreamStudio = () => {
       // Just update the state - the useEffect will handle attaching to video
       setStream(mediaStream);
       streamRef.current = mediaStream;
+      setVideoError(null); // Clear any previous errors
       
       return mediaStream;
     } catch (err) {
       console.error("Error accessing media devices:", err);
+      setVideoError("Failed to access camera: " + err.message);
       alert(`Failed to access camera and microphone: ${err.message}. Please ensure you've granted camera permission and no other app is using the camera.`);
       throw err;
     }
@@ -333,21 +417,61 @@ const StreamStudio = () => {
             />
           </div>
           
-          <div className="bg-black rounded-lg overflow-hidden aspect-video mb-4">
+          <div className="bg-black rounded-lg overflow-hidden aspect-video mb-4 relative">
             <video 
               ref={videoRef}
+              id="cameraPreview"
               autoPlay 
               playsInline
               muted 
-              style={{ width: '100%', height: '100%', objectFit: 'contain' }}
-              className="bg-black" 
+              style={{ 
+                width: '100%', 
+                height: '100%', 
+                objectFit: 'contain',
+                backgroundColor: 'black',
+                display: 'block'
+              }}
             />
+            
+            {!cameraReady && !videoError && (
+              <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-70">
+                <div className="text-center">
+                  <div className="inline-block animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-white mb-2"></div>
+                  <p>Initializing camera...</p>
+                </div>
+              </div>
+            )}
+            
+            {videoError && (
+              <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-90">
+                <div className="text-center p-4">
+                  <div className="text-red-500 text-4xl mb-2">⚠️</div>
+                  <p className="mb-4">{videoError}</p>
+                  <button
+                    onClick={() => getVideoStream().catch(console.error)}
+                    className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded"
+                  >
+                    Retry Camera Access
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
           
-          <div className="mt-4 flex justify-end">
+          <div className="mt-4 flex justify-between">
+            <div>
+              {cameraReady && (
+                <span className="text-green-400 text-sm flex items-center">
+                  <span className="w-2 h-2 bg-green-400 rounded-full mr-2"></span>
+                  Camera ready
+                </span>
+              )}
+            </div>
+            
             <button
               onClick={startStream}
               className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-lg"
+              disabled={!cameraReady || !title.trim()}
             >
               Start Streaming
             </button>
@@ -370,9 +494,15 @@ const StreamStudio = () => {
                   ref={videoRef}
                   autoPlay 
                   muted 
-                  style={{ width: '100%', height: '100%', objectFit: 'contain' }}
-                  className="bg-black"
+                  style={{ 
+                    width: '100%', 
+                    height: '100%', 
+                    objectFit: 'contain',
+                    backgroundColor: 'black',
+                    display: 'block'
+                  }}
                 />
+                
                 {!cameraReady && (
                   <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-70">
                     <div className="text-center">
@@ -415,6 +545,16 @@ const StreamStudio = () => {
           </div>
         </div>
       )}
+      
+      {/* Debug info */}
+      <div className="mt-4 p-4 bg-gray-900 rounded text-xs">
+        <p>Debug Info:</p>
+        <p>Stream active: {stream ? 'Yes' : 'No'}</p>
+        <p>Camera ready: {cameraReady ? 'Yes' : 'No'}</p>
+        <p>Video tracks: {stream ? stream.getVideoTracks().length : 0}</p>
+        <p>Video ref exists: {videoRef.current ? 'Yes' : 'No'}</p>
+        {videoError && <p className="text-red-400">Error: {videoError}</p>}
+      </div>
     </div>
   );
 };
