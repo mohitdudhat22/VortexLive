@@ -4,6 +4,13 @@ import io from 'socket.io-client';
 import Peer from 'simple-peer';
 import { v4 as uuidv4 } from 'uuid';
 import axios from 'axios';
+// Import Shadcn UI components
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Separator } from "@/components/ui/separator";
+import { AspectRatio } from "@/components/ui/aspect-ratio";
+import { Loader2 } from "lucide-react";
 
 const ViewStream = () => {
   const [hostStream, setHostStream] = useState(null);
@@ -271,79 +278,78 @@ const ViewStream = () => {
   };
 
   return (
-    <div className="max-w-4xl mx-auto p-4">
-      <div className="mb-4 flex justify-between items-center">
+    <div className="container max-w-4xl mx-auto p-4 space-y-4">
+      <div className="flex justify-between items-center">
         <h1 className="text-2xl font-bold">{streamInfo?.title || 'Live Stream'}</h1>
-        <button 
-          onClick={() => navigate('/')}
-          className="bg-gray-700 hover:bg-gray-600 text-white px-3 py-1 rounded"
-        >
+        <Button variant="outline" onClick={() => navigate('/')}>
           Back to Home
-        </button>
+        </Button>
       </div>
       
-      <div className="bg-gray-800 rounded-lg overflow-hidden">
-        <div className="relative aspect-video bg-black">
-          {/* Main video element */}
-          <video 
-            ref={videoRef} 
-            autoPlay 
-            playsInline
-            controls  
-            style={{ width: '100%', height: '100%', backgroundColor: 'black' }} 
-            className="object-contain"
-          />
-          
-          {/* Connection status overlays */}
-          {connecting && (
-            <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-70">
-              <div className="text-center">
-                <div className="inline-block animate-spin rounded-full h-10 w-10 border-t-2 border-b-2 border-white mb-2"></div>
-                <p className="text-lg">Connecting to stream...</p>
+      <Card>
+        <CardContent className="p-0">
+          <AspectRatio ratio={16/9} className="bg-black relative">
+            {/* Main video element */}
+            <video 
+              ref={videoRef} 
+              autoPlay 
+              playsInline
+              controls  
+              className="w-full h-full object-contain"
+            />
+            
+            {/* Connection status overlays */}
+            {connecting && (
+              <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-70">
+                <div className="text-center space-y-2">
+                  <Loader2 className="h-10 w-10 animate-spin mx-auto" />
+                  <p className="text-lg">Connecting to stream...</p>
+                </div>
               </div>
-            </div>
-          )}
-          
-          {connectionError && (
-            <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-70">
-              <div className="text-center max-w-md p-6">
-                <div className="text-red-500 text-5xl mb-3">⚠️</div>
-                <p className="text-xl mb-4">{connectionError}</p>
-                <button 
-                  onClick={retryConnection}
-                  className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-lg"
-                >
-                  Try Again
-                </button>
+            )}
+            
+            {connectionError && (
+              <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-70">
+                <div className="text-center max-w-md p-6">
+                  <div className="text-red-500 text-5xl mb-3">⚠️</div>
+                  <p className="text-xl mb-4">{connectionError}</p>
+                  <Button variant="default" onClick={retryConnection}>
+                    Try Again
+                  </Button>
+                </div>
               </div>
-            </div>
-          )}
-        </div>
+            )}
+          </AspectRatio>
+        </CardContent>
         
         {connected && (
-          <div className="p-4">
-            <div className="flex items-center mb-2">
-              <span className="bg-red-600 px-2 py-1 rounded-full text-sm mr-2">LIVE</span>
-              <p className="text-gray-300">Room: {roomId}</p>
+          <CardFooter className="flex flex-col items-start p-4">
+            <div className="flex items-center w-full">
+              <Badge variant="destructive" className="mr-2">LIVE</Badge>
+              <p className="text-muted-foreground">Room: {roomId}</p>
             </div>
-            <h2 className="text-xl font-semibold mb-2">{streamInfo?.title}</h2>
-          </div>
+            <h2 className="text-xl font-semibold mt-2">{streamInfo?.title}</h2>
+          </CardFooter>
         )}
-      </div>
+      </Card>
       
       {/* Debug info - useful for troubleshooting */}
-      <div className="mt-4 p-4 bg-gray-900 rounded text-xs">
-        <p>Debug Info:</p>
-        <p>API URL: {API_URL}</p>
-        <p>Room ID: {roomId}</p>
-        <p>Host ID: {hostId || 'Unknown'}</p>
-        <p>Connected: {connected ? 'Yes' : 'No'}</p>
-        <p>Connection Attempted: {connectionAttemptedRef.current ? 'Yes' : 'No'}</p>
-        <p>Host Stream: {hostStream ? 'Received' : 'Not received'}</p>
-        <p>Video Tracks: {hostStream ? hostStream.getVideoTracks().length : 0}</p>
-        <p>Audio Tracks: {hostStream ? hostStream.getAudioTracks().length : 0}</p>
-        {connectionError && <p className="text-red-400">Error: {connectionError}</p>}
-      </div>
+      <Card className="bg-muted">
+        <CardHeader>
+          <CardTitle className="text-sm">Debug Info</CardTitle>
+        </CardHeader>
+        <CardContent className="text-xs space-y-1">
+          <p>API URL: {API_URL}</p>
+          <p>Room ID: {roomId}</p>
+          <p>Host ID: {hostId || 'Unknown'}</p>
+          <p>Connected: {connected ? 'Yes' : 'No'}</p>
+          <p>Connection Attempted: {connectionAttemptedRef.current ? 'Yes' : 'No'}</p>
+          <p>Host Stream: {hostStream ? 'Received' : 'Not received'}</p>
+          <p>Video Tracks: {hostStream ? hostStream.getVideoTracks().length : 0}</p>
+          <p>Audio Tracks: {hostStream ? hostStream.getAudioTracks().length : 0}</p>
+          {connectionError && <p className="text-red-500">Error: {connectionError}</p>}
+        </CardContent>
+      </Card>
     </div>
   );
 };
