@@ -84,16 +84,15 @@ router.get('/:roomId/source', async (req, res) => {
     res.setHeader('Connection', 'keep-alive');
     res.setHeader('Cache-Control', 'no-cache');
     
-    // Here you'd need to pipe the WebRTC stream data to this response
-    // This could be implemented using a WebRTC gateway or media server
-    // For simplicity, we'll mock a response here
+    // Instead of using a placeholder URL, you need to implement
+    // a method to access your WebRTC stream directly
     
-    // In a real implementation, you'd get the stream from your media server
-    // For example, using mediasoup, Janus, or other WebRTC SFU/MCU
-    const mediaServerStreamUrl = `https://your-media-server.com/streams/${roomId}`;
+    // Option 1: If you have media server with API access point:
+    const mediaServerStreamUrl = `http://localhost:8000/streams/${roomId}`;
     
-    // You could use another FFmpeg instance to pull from your WebRTC server
-    // and pipe to this response
+    // OR Option 2: Use a temporary file approach (requires implementing recording functionality)
+    // const mediaServerStreamUrl = `file://${process.cwd()}/temp/${roomId}.webm`;
+    
     const ffmpeg = spawn(ffmpegPath, [
       '-i', mediaServerStreamUrl,
       '-c:v', 'copy',
