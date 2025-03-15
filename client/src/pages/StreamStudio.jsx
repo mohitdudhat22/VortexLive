@@ -5,6 +5,7 @@ import { v4 as uuidv4 } from 'uuid';
 import io from 'socket.io-client';
 import Peer from 'simple-peer';
 import ChatPanel from '../components/ChatPanel';
+import RtmpControls from '../components/RtmpControls';
 
 const StreamStudio = () => {
   const [title, setTitle] = useState('');
@@ -399,7 +400,7 @@ const StreamStudio = () => {
   };
 
   return (
-    <div className="max-w-4xl mx-auto">
+    <div className="container mx-auto px-4">
       <h1 className="text-2xl font-bold mb-6">{isStreaming ? 'Live Stream' : 'Stream Studio'}</h1>
       
       {!isStreaming ? (
@@ -512,6 +513,15 @@ const StreamStudio = () => {
                     </div>
                   </div>
                 )}
+              </div>
+              
+              <div className="mt-4">
+                <RtmpControls 
+                  socket={socketRef.current}
+                  roomId={streamData?.roomId}
+                  userId={hostId}
+                  isHost={true}
+                />
               </div>
               
               <div className="mt-4 flex justify-end">

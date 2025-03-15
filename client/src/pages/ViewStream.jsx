@@ -12,6 +12,7 @@ import { Separator } from "@/components/ui/separator";
 import { AspectRatio } from "@/components/ui/aspect-ratio";
 import { Loader2 } from "lucide-react";
 import ChatPanel from '../components/ChatPanel';
+import RtmpControls from '../components/RtmpControls';
 
 const ViewStream = () => {
   const [hostStream, setHostStream] = useState(null);
@@ -320,6 +321,18 @@ const ViewStream = () => {
                         Try Again
                       </Button>
                     </div>
+                  </div>
+                )}
+                
+                {/* RTMP status indicator for viewers */}
+                {connected && (
+                  <div className="absolute top-4 right-4">
+                    <RtmpControls 
+                      socket={socketRef.current}
+                      roomId={roomId}
+                      userId={viewerId}
+                      isHost={false}
+                    />
                   </div>
                 )}
               </AspectRatio>

@@ -1,0 +1,256 @@
+.rtmp-controls-container {
+  width: 100%;
+  background-color: rgba(17, 17, 17, 0.9);
+  border-radius: 8px;
+  margin: 12px 0;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
+  overflow: hidden;
+  flex-shrink: 0;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.rtmp-controls-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 15px;
+  cursor: pointer;
+  user-select: none;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  background-color: rgba(0, 0, 0, 0.2);
+}
+
+.rtmp-controls-header h3 {
+  margin: 0;
+  font-size: 16px;
+  color: #f0f0f0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.expand-icon {
+  color: #999;
+  font-size: 12px;
+  transition: transform 0.2s ease;
+}
+
+.rtmp-controls-body {
+  padding: 15px;
+  color: #e0e0e0;
+}
+
+.live-indicator {
+  background-color: #ff0000;
+  color: white;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: bold;
+  animation: pulse 1.5s infinite;
+  display: flex;
+  align-items: center;
+  margin-right: 10px;
+}
+
+.live-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  background-color: #ff0000;
+  border-radius: 50%;
+  margin-right: 4px;
+  animation: pulse 1.5s infinite;
+}
+
+@keyframes pulse {
+  0% { opacity: 1; }
+  50% { opacity: 0.5; }
+  100% { opacity: 1; }
+}
+
+/* Platform configuration */
+.platform-config {
+  margin-bottom: 12px;
+  padding: 10px;
+  background-color: rgba(0, 0, 0, 0.2);
+  border-radius: 6px;
+  transition: all 0.3s ease;
+}
+
+.platform-config.active-platform {
+  background-color: rgba(40, 167, 69, 0.15);
+  border-left: 3px solid #28a745;
+}
+
+.platform-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.platform-toggle {
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+}
+
+.platform-toggle input {
+  margin-right: 8px;
+}
+
+.platform-name {
+  font-weight: 500;
+  color: #f0f0f0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.stream-key-input {
+  margin-top: 5px;
+  position: relative;
+}
+
+.stream-key-input button {
+  background: none;
+  border: none;
+  padding: 0;
+  height: auto;
+}
+
+.stream-key-input button:hover {
+  border: none;
+}
+
+/* Make the stream key input more visible */
+.stream-key-field {
+  background-color: rgba(30, 30, 30, 0.8) !important;
+  border: 1px solid rgba(255, 255, 255, 0.2) !important;
+  color: white !important;
+}
+
+.stream-key-field:disabled {
+  opacity: 0.7 !important;
+  background-color: rgba(50, 50, 50, 0.5) !important;
+}
+
+/* Make input labels more visible */
+.text-gray-400 {
+  color: rgba(255, 255, 255, 0.7) !important;
+}
+
+/* Active streams */
+.active-streams {
+  padding: 10px;
+  background-color: rgba(0, 0, 0, 0.2);
+  border-radius: 6px;
+}
+
+.streaming-status {
+  display: flex;
+  align-items: center;
+  margin-bottom: 15px;
+  font-weight: 500;
+}
+
+.active-platforms {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 15px;
+}
+
+.active-platform {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 12px;
+  background-color: rgba(255, 255, 255, 0.05);
+  border-radius: 4px;
+}
+
+.platform-label {
+  font-size: 14px;
+}
+
+/* Buttons */
+.start-streaming-btn, .stop-all-btn {
+  width: 100%;
+  padding: 10px;
+  border: none;
+  border-radius: 4px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  margin-top: 5px;
+}
+
+.start-streaming-btn {
+  background-color: #2ecc71;
+  color: white;
+}
+
+.start-streaming-btn:hover:not(:disabled) {
+  background-color: #27ae60;
+}
+
+.start-streaming-btn:disabled {
+  background-color: #95a5a6;
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
+.stop-platform-btn {
+  background-color: transparent;
+  color: #e74c3c;
+  border: 1px solid #e74c3c;
+  padding: 3px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.stop-platform-btn:hover {
+  background-color: rgba(231, 76, 60, 0.1);
+}
+
+.stop-all-btn {
+  background-color: #e74c3c;
+  color: white;
+}
+
+.stop-all-btn:hover {
+  background-color: #c0392b;
+}
+
+/* Viewer badge */
+.rtmp-viewer-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 5px 10px;
+  background-color: rgba(0, 0, 0, 0.6);
+  border-radius: 20px;
+  color: white;
+  font-size: 12px;
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 10;
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+  .rtmp-controls-container {
+    margin: 8px 0;
+  }
+  
+  .rtmp-controls-header h3 {
+    font-size: 14px;
+  }
+  
+  .platform-config {
+    padding: 8px;
+  }
+} 
