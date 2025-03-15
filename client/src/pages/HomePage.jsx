@@ -9,7 +9,7 @@ const HomePage = () => {
   useEffect(() => {
     const fetchStreams = async () => {
       try {
-        const res = await axios.get('http://localhost:5000/api/streams');
+        const res = await axios.get(import.meta.env.VITE_API_URL + '/api/streams');
         setStreams(res.data);
         setLoading(false);
       } catch (error) {
