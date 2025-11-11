@@ -2,12 +2,13 @@
 'use client'
 import { useState, useEffect } from 'react';
 import axios from 'axios';
-import router from 'next/router';
 import { NEXT_PUBLIC_API_URL } from '@/src/utils/constants';
+import { useRouter } from 'next/navigation'
 
 const HomePage = () => {
   const [streams, setStreams] = useState([]);
   const [loading, setLoading] = useState(true);
+  const router = useRouter();
 
   useEffect(() => {
     const fetchStreams = async () => {
@@ -39,7 +40,7 @@ const HomePage = () => {
       {streams.length === 0 ? (
         <div className="text-center py-12">
           <p className="text-xl mb-4">No streams are currently live</p>
-          <div onClick={() => {router.push("/studio")}} className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-lg">
+          <div onClick={() => router.push("/stream-studio")} className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-lg">
             Start Streaming
           </div>
         </div>

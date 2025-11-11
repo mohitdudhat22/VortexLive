@@ -21,3 +21,4 @@ function StreamView() {
     </div>
   );
 }
+export default StreamView;

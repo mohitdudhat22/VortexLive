@@ -1,12 +1,13 @@
 // @ts-nocheck
 'use client'
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import axios from 'axios';
 import { v4 as uuidv4 } from 'uuid';
 import io from 'socket.io-client';
 import Peer from 'simple-peer';
 import ChatPanel from '../../components/ChatPanel';
 import RtmpControls from '../../components/RtmpControls';
+import { NEXT_PUBLIC_API_URL } from '@/src/utils/constants';
 
 const StreamStudio = () => {
   const [title, setTitle] = useState('');
@@ -17,33 +18,47 @@ const StreamStudio = () => {
   const [viewerCount, setViewerCount] = useState(0);
   const [cameraReady, setCameraReady] = useState(false);
   const [videoError, setVideoError] = useState(null);
-  
+  const [hostId, setHostId] = useState(null);
+  const [mediaRecorder, setMediaRecorder] = useState(null);
+  const [isStreamingToBackend, setIsStreamingToBackend] = useState(false);
+  const mediaRecorderRef = useRef(null);
+
+
   const videoRef = useRef();
   const socketRef = useRef();
   const peersRef = useRef([]);
-  
+
   // Create refs to keep track of latest state values
   const streamRef = useRef(null);
   const streamDataRef = useRef(null);
-  
-  const hostId = localStorage.getItem('userId') || uuidv4();
-  
+
+
+  useEffect(() => {
+    let storedId = localStorage.getItem('userId');
+    if (!storedId) {
+      storedId = uuidv4();
+      localStorage.setItem('userId', storedId);
+    }
+    setHostId(storedId);
+  }, []);
+
+
   // Update refs when state changes
   useEffect(() => {
     streamRef.current = stream;
   }, [stream]);
-  
+
   useEffect(() => {
     streamDataRef.current = streamData;
   }, [streamData]);
-  
+
   // Save the user ID to localStorage if it doesn't exist
   useEffect(() => {
     if (!localStorage.getItem('userId')) {
       localStorage.setItem('userId', hostId);
     }
   }, [hostId]);
-  
+
   // Get camera on component mount
   useEffect(() => {
     if (!isStreaming && !stream) {
@@ -59,31 +74,31 @@ const StreamStudio = () => {
     if (stream && videoRef.current) {
       console.log("Setting video source from useEffect...");
       // Try different methods to ensure video is displayed
-      
+
       try {
         // Method 1: Direct srcObject assignment
         videoRef.current.srcObject = stream;
         videoRef.current.muted = true;
-        
+
         // Add event listeners to track video loading
         videoRef.current.onloadedmetadata = () => {
           console.log("Video metadata loaded!");
         };
-        
+
         videoRef.current.onloadeddata = () => {
           console.log("Video data loaded!");
         };
-        
+
         videoRef.current.onplaying = () => {
           console.log("Video is now playing!");
           setCameraReady(true);
         };
-        
+
         videoRef.current.onerror = (e) => {
           console.error("Video element error:", e);
           setVideoError("Video element error: " + e.target.error?.message || "Unknown error");
         };
-        
+
         // Force a play attempt
         const playPromise = videoRef.current.play();
         if (playPromise !== undefined) {
@@ -94,7 +109,7 @@ const StreamStudio = () => {
             })
             .catch(e => {
               console.error("Error playing video from useEffect:", e);
-              
+
               // Try Method 2: Create a fallback video element if the first one fails
               console.log("Trying fallback method...");
               const fallbackVideo = document.createElement('video');
@@ -108,12 +123,12 @@ const StreamStudio = () => {
               fallbackVideo.style.objectFit = 'contain';
               fallbackVideo.style.backgroundColor = 'black';
               fallbackVideo.srcObject = stream;
-              
+
               // Try to play the fallback
               fallbackVideo.play()
                 .then(() => {
                   console.log("Fallback video playing!");
-                  
+
                   // Replace the original video
                   if (videoRef.current && videoRef.current.parentNode) {
                     videoRef.current.parentNode.replaceChild(fallbackVideo, videoRef.current);
@@ -123,7 +138,7 @@ const StreamStudio = () => {
                 })
                 .catch(fallbackErr => {
                   console.error("Fallback also failed:", fallbackErr);
-                  
+
                   // Final option: Create a button for user interaction
                   const playButton = document.createElement('button');
                   playButton.textContent = 'Click to enable camera';
@@ -138,12 +153,12 @@ const StreamStudio = () => {
                   playButton.style.border = 'none';
                   playButton.style.borderRadius = '5px';
                   playButton.style.cursor = 'pointer';
-                  
+
                   const videoContainer = videoRef.current.parentElement;
                   if (videoContainer) {
                     videoContainer.style.position = 'relative';
                     videoContainer.appendChild(playButton);
-                    
+
                     playButton.onclick = () => {
                       videoRef.current.play()
                         .then(() => {
@@ -170,7 +185,7 @@ const StreamStudio = () => {
   const getVideoStream = async () => {
     try {
       console.log("Requesting camera and microphone access...");
-      
+
       // Try a simpler constraint first just to get something working
       const mediaStream = await navigator.mediaDevices.getUserMedia({
         video: {
@@ -179,11 +194,11 @@ const StreamStudio = () => {
         },
         audio: true
       });
-      
+
       console.log("Media stream obtained:", mediaStream);
       console.log("Video tracks:", mediaStream.getVideoTracks().length);
       console.log("Audio tracks:", mediaStream.getAudioTracks().length);
-      
+
       // Check active state of tracks
       const videoTrack = mediaStream.getVideoTracks()[0];
       if (videoTrack) {
@@ -191,16 +206,16 @@ const StreamStudio = () => {
         console.log("Video track constraints:", videoTrack.getConstraints());
         console.log("Video track active:", videoTrack.enabled);
       }
-      
+
       if (mediaStream.getVideoTracks().length === 0) {
         throw new Error("No video track available in the media stream");
       }
-      
+
       // Just update the state - the useEffect will handle attaching to video
       setStream(mediaStream);
       streamRef.current = mediaStream;
       setVideoError(null); // Clear any previous errors
-      
+
       return mediaStream;
     } catch (err) {
       console.error("Error accessing media devices:", err);
@@ -209,13 +224,105 @@ const StreamStudio = () => {
       throw err;
     }
   };
+  const startStreamingToBackend = useCallback((mediaStream, socket) => {
+    try {
+      console.log('Starting MediaRecorder for backend streaming...');
+
+      // Check if MediaRecorder is supported
+      if (!window.MediaRecorder) {
+        throw new Error('MediaRecorder is not supported in this browser');
+      }
+
+      // Try different codecs with explicit bitrates
+      let options = {
+        mimeType: 'video/webm;codecs=vp8,opus',
+        videoBitsPerSecond: 2500000,
+        audioBitsPerSecond: 128000
+      };
+
+      if (!MediaRecorder.isTypeSupported(options.mimeType)) {
+        console.log('VP8 not supported, trying VP9...');
+        options = {
+          mimeType: 'video/webm;codecs=vp9,opus',
+          videoBitsPerSecond: 2500000,
+          audioBitsPerSecond: 128000
+        };
+
+        if (!MediaRecorder.isTypeSupported(options.mimeType)) {
+          console.log('VP9 not supported, using default...');
+          options = {
+            mimeType: 'video/webm',
+            videoBitsPerSecond: 2500000,
+            audioBitsPerSecond: 128000
+          };
+        }
+      }
+
+      console.log('Using MediaRecorder with:', options.mimeType);
+
+      const recorder = new MediaRecorder(mediaStream, options);
+
+      recorder.ondataavailable = async (event) => {
+        try {
+          if (event.data && event.data.size > 0) {
+            const arrayBuffer = await event.data.arrayBuffer();
+            if (socket && socket.connected && streamDataRef.current) {
+              // Send raw binary for reliable EBML header and media data delivery
+              socket.emit('stream-data', {
+                roomId: streamDataRef.current.roomId,
+                data: arrayBuffer
+              });
+            }
+          }
+        } catch (e) {
+          console.error('ondataavailable error:', e);
+        }
+      };
+
+      recorder.onerror = (error) => {
+        console.error('MediaRecorder error:', error);
+        toast.error('Video recording error: ' + error.message);
+      };
+
+      recorder.onstop = () => {
+        console.log('MediaRecorder stopped');
+        setIsStreamingToBackend(false);
+      };
+
+      // Start recording with 300ms timeslices for smoother chunking
+      recorder.start(300);
+
+      mediaRecorderRef.current = recorder;
+      setMediaRecorder(recorder);
+      setIsStreamingToBackend(true);
+
+      console.log('MediaRecorder started successfully');
+      return recorder;
+
+    } catch (error) {
+      console.error('Error starting MediaRecorder:', error);
+      toast.error('Failed to start video streaming: ' + error.message);
+      throw error;
+    }
+  }, []);
+
+  // Add this function to stop streaming to backend
+  const stopStreamingToBackend = useCallback(() => {
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      console.log('Stopping MediaRecorder...');
+      mediaRecorderRef.current.stop();
+      mediaRecorderRef.current = null;
+      setMediaRecorder(null);
+      setIsStreamingToBackend(false);
+    }
+  }, []);
 
   const startStream = async () => {
     if (!title.trim()) {
       alert("Please enter a stream title");
       return;
     }
-    
+
     try {
       // Show loading state
       const loadingElem = document.createElement('div');
@@ -232,50 +339,78 @@ const StreamStudio = () => {
       loadingElem.style.zIndex = '9999';
       loadingElem.innerHTML = '<div style="color:white;text-align:center;"><div style="display:inline-block;width:40px;height:40px;border:3px solid #fff;border-radius:50%;border-top-color:transparent;animation:spin 1s linear infinite;"></div><div style="margin-top:10px;">Starting stream...</div></div>';
       document.body.appendChild(loadingElem);
-      
+
       // Define the animation
       const style = document.createElement('style');
       style.innerHTML = '@keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }';
       document.head.appendChild(style);
-      
+
       // Get the stream
       const mediaStream = await getVideoStream();
-      
+
       // Create a stream in the database
-      const response = await axios.post(import.meta.env.VITE_API_URL + '/api/streams', {
+      const response = await axios.post(NEXT_PUBLIC_API_URL + '/api/streams', {
         title,
         hostId
       });
-      
+
       // Update state with stream data
       setStreamData(response.data);
       streamDataRef.current = response.data;
-      
+
       // Only now update isStreaming state to trigger re-render
       setIsStreaming(true);
-      
+
       // Remove loading overlay
       const loadingElement = document.getElementById('stream-loading');
       if (loadingElement) {
         document.body.removeChild(loadingElement);
       }
-      
+
       // Connect to socket server - after UI has changed
       setTimeout(() => {
         // Set up socket connection for streaming
-        socketRef.current = io(import.meta.env.VITE_API_URL);
-        
+        socketRef.current = io(NEXT_PUBLIC_API_URL);
+
         // Register user ID with socket
         socketRef.current.emit('register-user', { userId: hostId });
-        
+
         // Join the room
         socketRef.current.emit('join-room', response.data.roomId, hostId);
-        
+
+        // *** NEW: Start streaming video data to backend for RTMP ***
+        // This will make the video available for FFmpeg to consume
+        try {
+          startStreamingToBackend(mediaStream, socketRef.current);
+          console.log('Started streaming video data to backend');
+        } catch (error) {
+          console.error('Failed to start backend streaming:', error);
+          toast.error('Warning: External streaming may not work');
+        }
+
+        // Listen for server request to resend fresh WebM header (restart MediaRecorder)
+        socketRef.current.on('request-media-header', ({ roomId: reqRoom }) => {
+          if (!streamDataRef.current || reqRoom !== streamDataRef.current.roomId) return;
+          console.log('[StreamStudio] Received request-media-header, restarting MediaRecorder...');
+          try {
+            stopStreamingToBackend();
+            // Small delay to ensure recorder stops
+            setTimeout(() => {
+              if (streamRef.current) {
+                startStreamingToBackend(streamRef.current, socketRef.current);
+                console.log('[StreamStudio] MediaRecorder restarted to resend header');
+              }
+            }, 150);
+          } catch (e) {
+            console.error('Failed to restart MediaRecorder on header request:', e);
+          }
+        });
+
         // Handle new viewer connections
         socketRef.current.on('user-connected', (userId) => {
           console.log('New viewer connected:', userId);
           setViewerCount(prev => prev + 1);
-          
+
           // Use the refs to access the latest values
           if (streamRef.current && streamDataRef.current) {
             const peer = createPeer(userId, hostId, streamRef.current);
@@ -283,7 +418,7 @@ const StreamStudio = () => {
               peerId: userId,
               peer,
             });
-            
+
             setPeers(prevPeers => [...prevPeers, { peerId: userId, peer }]);
           } else {
             console.error('Cannot create peer: stream or streamData is not available');
@@ -291,7 +426,7 @@ const StreamStudio = () => {
             console.log('StreamData available:', !!streamDataRef.current);
           }
         });
-        
+
         // Handle signals from viewers
         socketRef.current.on('user-signal', ({ userId, signal }) => {
           const item = peersRef.current.find(p => p.peerId === userId);
@@ -299,29 +434,29 @@ const StreamStudio = () => {
             item.peer.signal(signal);
           }
         });
-        
+
         // Handle viewer disconnections
         socketRef.current.on('user-disconnected', (userId) => {
           console.log('Viewer disconnected:', userId);
           setViewerCount(prev => Math.max(0, prev - 1));
-          
+
           const peerObj = peersRef.current.find(p => p.peerId === userId);
           if (peerObj) {
             peerObj.peer.destroy();
           }
-          
+
           peersRef.current = peersRef.current.filter(p => p.peerId !== userId);
           setPeers(prevPeers => prevPeers.filter(p => p.peerId !== userId));
         });
       }, 500);
-      
+
     } catch (error) {
       // Remove loading overlay on error too
       const loadingElement = document.getElementById('stream-loading');
       if (loadingElement) {
         document.body.removeChild(loadingElement);
       }
-      
+
       console.error('Error starting stream:', error);
       alert('Failed to start stream. Please try again.');
     }
@@ -344,11 +479,11 @@ const StreamStudio = () => {
     peer.on('signal', signal => {
       if (socketRef.current && streamDataRef.current && streamDataRef.current.roomId) {
         console.log('Host sending signal to viewer', viewerId);
-        socketRef.current.emit('signal', { 
-          userId: hostId, 
+        socketRef.current.emit('signal', {
+          userId: hostId,
           roomId: streamDataRef.current.roomId,
           targetUserId: viewerId,
-          signal 
+          signal
         });
       } else {
         console.error('Cannot emit signal: streamData or socketRef is not available');
@@ -365,24 +500,27 @@ const StreamStudio = () => {
 
   const stopStream = async () => {
     try {
+      // *** NEW: Stop streaming video data to backend ***
+      stopStreamingToBackend();
+
       if (streamDataRef.current && streamDataRef.current._id) {
-        await axios.patch(`${import.meta.env.VITE_API_URL}/api/streams/${streamDataRef.current._id}/end`);
+        await axios.patch(`${NEXT_PUBLIC_API_URL}/api/streams/${streamDataRef.current._id}/end`);
       }
-      
+
       // Stop all tracks in the stream
       if (streamRef.current) {
         streamRef.current.getTracks().forEach(track => track.stop());
       }
-      
+
       // Clean up socket and peers
       if (socketRef.current) {
         socketRef.current.disconnect();
       }
-      
+
       peersRef.current.forEach(({ peer }) => {
         peer.destroy();
       });
-      
+
       setIsStreaming(false);
       setStream(null);
       streamRef.current = null;
@@ -391,8 +529,10 @@ const StreamStudio = () => {
       setPeers([]);
       setViewerCount(0);
       setCameraReady(false);
-      router.push('/');
-      
+
+      // Navigate to home if you have router
+      // router.push('/');
+
     } catch (error) {
       console.error('Error stopping stream:', error);
       alert('Failed to end stream properly. Please try again.');
@@ -402,7 +542,7 @@ const StreamStudio = () => {
   return (
     <div className="container mx-auto px-4">
       <h1 className="text-2xl font-bold mb-6">{isStreaming ? 'Live Stream' : 'Stream Studio'}</h1>
-      
+
       {!isStreaming ? (
         <div className="bg-gray-800 rounded-lg p-6">
           <div className="mb-4">
@@ -418,23 +558,23 @@ const StreamStudio = () => {
               placeholder="Enter a title for your stream"
             />
           </div>
-          
+
           <div className="bg-black rounded-lg overflow-hidden aspect-video mb-4 relative">
-            <video 
+            <video
               ref={videoRef}
               id="cameraPreview"
-              autoPlay 
+              autoPlay
               playsInline
-              muted 
-              style={{ 
-                width: '100%', 
-                height: '100%', 
+              muted
+              style={{
+                width: '100%',
+                height: '100%',
                 objectFit: 'contain',
                 backgroundColor: 'black',
                 display: 'block'
               }}
             />
-            
+
             {!cameraReady && !videoError && (
               <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-70">
                 <div className="text-center">
@@ -443,7 +583,7 @@ const StreamStudio = () => {
                 </div>
               </div>
             )}
-            
+
             {videoError && (
               <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-90">
                 <div className="text-center p-4">
@@ -459,7 +599,7 @@ const StreamStudio = () => {
               </div>
             )}
           </div>
-          
+
           <div className="mt-4 flex justify-between">
             <div>
               {cameraReady && (
@@ -469,7 +609,7 @@ const StreamStudio = () => {
                 </span>
               )}
             </div>
-            
+
             <button
               onClick={startStream}
               className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-lg"
@@ -490,21 +630,21 @@ const StreamStudio = () => {
                   <span className="text-gray-300">{viewerCount} viewer{viewerCount !== 1 ? 's' : ''}</span>
                 </div>
               </div>
-              
+
               <div className="relative bg-black rounded-lg overflow-hidden aspect-video">
-                <video 
+                <video
                   ref={videoRef}
-                  autoPlay 
-                  muted 
-                  style={{ 
-                    width: '100%', 
-                    height: '100%', 
+                  autoPlay
+                  muted
+                  style={{
+                    width: '100%',
+                    height: '100%',
                     objectFit: 'contain',
                     backgroundColor: 'black',
                     display: 'block'
                   }}
                 />
-                
+
                 {!cameraReady && (
                   <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-70">
                     <div className="text-center">
@@ -514,16 +654,16 @@ const StreamStudio = () => {
                   </div>
                 )}
               </div>
-              
+
               <div className="mt-4">
-                <RtmpControls 
+                <RtmpControls
                   socket={socketRef.current}
                   roomId={streamData?.roomId}
                   userId={hostId}
                   isHost={true}
                 />
               </div>
-              
+
               <div className="mt-4 flex justify-end">
                 <button
                   onClick={stopStream}
@@ -534,9 +674,9 @@ const StreamStudio = () => {
               </div>
             </div>
           </div>
-          
+
           <div className="bg-gray-800 rounded-lg">
-            <ChatPanel 
+            <ChatPanel
               socket={socketRef.current}
               roomId={streamData?.roomId}
               userId={hostId}
@@ -546,7 +686,7 @@ const StreamStudio = () => {
           </div>
         </div>
       )}
-      
+
       {/* Debug info */}
       <div className="mt-4 p-4 bg-gray-900 rounded text-xs">
         <p>Debug Info:</p>

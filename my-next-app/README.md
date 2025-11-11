@@ -34,3 +34,52 @@ You can check out [the Next.js GitHub repository](https://github.com/vercel/next
 The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
 
 Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+
+---
+
+## ⚙️ Tech Stack
+
+| Layer | Tech |
+|:------|:-----|
+| Frontend | WebRTC / MediaRecorder API |
+| Transport | Socket.IO (WebSocket under the hood) |
+| Backend | Node.js (Express + Socket.IO) |
+| Encoding / Push | FFmpeg (via child process) |
+| Targets | YouTube RTMP, Twitch RTMP, Facebook Live RTMP |
+Browser Camera
+↓
+MediaRecorder (captures every 100 ms)
+↓
+Socket.IO (stream-data event with base64)
+↓
+Backend (decodes base64 → Buffer)
+↓
+FFmpeg stdin (one process per platform)
+↓
+YouTube / Twitch / Facebook RTMP servers
+---
+
+## 🚀 How It Works
+
+### 1️⃣ Browser Capture
+
+The browser grabs audio/video with `getUserMedia` and periodically records short chunks using the **MediaRecorder API**.
+
+```js
+const socket = io("https://your-server.com");
+
+navigator.mediaDevices.getUserMedia({ video: true, audio: true })
+  .then(stream => {
+    const recorder = new MediaRecorder(stream, { mimeType: "video/webm; codecs=vp8" });
+
+    recorder.ondataavailable = e => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        socket.emit("stream-data", reader.result.split(",")[1]); // base64 payload
+      };
+      reader.readAsDataURL(e.data);
+    };
+
+    recorder.start(100); // emit every 100ms
+  });
+

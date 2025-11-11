@@ -1,18 +1,21 @@
+// @ts-nocheck
+'use client'
 import { useState, useEffect, useRef } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
 import io from 'socket.io-client';
 import Peer from 'simple-peer';
 import { v4 as uuidv4 } from 'uuid';
 import axios from 'axios';
 // Import Shadcn UI components
-import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { Separator } from "@/components/ui/separator";
-import { AspectRatio } from "@/components/ui/aspect-ratio";
+import { Button } from "@/src/components/ui/button";
+import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/src/components/ui/card";
+import { Badge } from "@/src/components/ui/badge";
+import { Separator } from "@/src/components/ui/separator";
+import { AspectRatio } from "@/src/components/ui/aspect-ratio";
 import { Loader2 } from "lucide-react";
-import ChatPanel from '../components/ChatPanel';
-import RtmpControls from '../components/RtmpControls';
+import ChatPanel from '../../components/ChatPanel';
+import RtmpControls from '../../components/RtmpControls';
+import { NEXT_PUBLIC_API_URL } from '@/src/utils/constants';
+import { useParams, useSearchParams } from 'next/navigation';
 
 const ViewStream = () => {
   const [hostStream, setHostStream] = useState(null);
@@ -21,20 +24,27 @@ const ViewStream = () => {
   const [connectionError, setConnectionError] = useState(null);
   const [streamInfo, setStreamInfo] = useState(null);
   const [hostId, setHostId] = useState(null);
-  
-  const { roomId } = useParams();
-  const navigate = useNavigate();
+  const [viewerId, setViewerId] = useState(null)
+  const searchParams = useSearchParams();
+  const roomId = searchParams.get('roomId');
   
   const socketRef = useRef();
   const peerRef = useRef();
   const videoRef = useRef();
   const connectionAttemptedRef = useRef(false);
   
-  // Generate or retrieve viewer ID
-  const viewerId = localStorage.getItem('viewerId') || uuidv4();
+  useEffect(() => {
+    // Run only on client
+    let storedId = localStorage.getItem('viewerId');
+    if (!storedId) {
+      storedId = uuidv4();
+      localStorage.setItem('viewerId', storedId);
+    }
+    setViewerId(storedId);
+  }, []);
   
   // API URL from environment variables
-  const API_URL = import.meta.env.VITE_API_URL;
+  const API_URL = NEXT_PUBLIC_API_URL;
   
   // Save the user ID to localStorage if it doesn't exist
   useEffect(() => {
@@ -283,7 +293,7 @@ const ViewStream = () => {
     <div className="container max-w-4xl mx-auto p-4 space-y-4">
       <div className="flex justify-between items-center">
         <h1 className="text-2xl font-bold">{streamInfo?.title || 'Live Stream'}</h1>
-        <Button variant="outline" onClick={() => navigate('/')}>
+        <Button variant="outline" onClick={() => router.push('/')}>
           Back to Home
         </Button>
       </div>
@@ -356,7 +366,7 @@ const ViewStream = () => {
             socket={socketRef.current}
             roomId={roomId}
             userId={viewerId}
-            username={`Viewer_${viewerId.substring(0, 4)}`}
+            username={`Viewer_${viewerId?.substring(0, 4)}`}
             isHost={false}
           />
         </div>
