@@ -1,3 +1,5 @@
+// @ts-nocheck
+'use client'
 import RtmpControls from '../../components/RtmpControls';
 
 function StreamView() {

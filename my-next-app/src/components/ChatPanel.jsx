@@ -2,24 +2,24 @@ import { useState, useEffect, useRef } from 'react';
 import { Smile, Flag, Trash2, UserX, Send } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import EmojiPicker from 'emoji-picker-react';
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { Button } from "@/src/components/ui/button";
+import { Input } from "@/src/components/ui/input";
 import { 
   Card, 
   CardContent, 
   CardFooter, 
   CardHeader, 
   CardTitle 
-} from "@/components/ui/card";
-import { Separator } from "@/components/ui/separator";
-import { ScrollArea } from "@/components/ui/scroll-area";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+} from "@/src/components/ui/card";
+import { Separator } from "@/src/components/ui/separator";
+import { ScrollArea } from "@/src/components/ui/scroll-area";
+import { Popover, PopoverContent, PopoverTrigger } from "@/src/components/ui/popover";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger
-} from "@/components/ui/dropdown-menu";
+} from "@/src/components/ui/dropdown-menu";
 
 const ChatPanel = ({ 
   socket, 

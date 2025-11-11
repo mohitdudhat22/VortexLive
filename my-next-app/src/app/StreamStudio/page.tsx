@@ -1,7 +1,6 @@
 // @ts-nocheck
 'use client'
 import { useState, useEffect, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { v4 as uuidv4 } from 'uuid';
 import io from 'socket.io-client';
@@ -22,7 +21,6 @@ const StreamStudio = () => {
   const videoRef = useRef();
   const socketRef = useRef();
   const peersRef = useRef([]);
-  const navigate = useNavigate();
   
   // Create refs to keep track of latest state values
   const streamRef = useRef(null);
@@ -393,7 +391,7 @@ const StreamStudio = () => {
       setPeers([]);
       setViewerCount(0);
       setCameraReady(false);
-      navigate('/');
+      router.push('/');
       
     } catch (error) {
       console.error('Error stopping stream:', error);

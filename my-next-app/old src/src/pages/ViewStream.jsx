@@ -11,8 +11,8 @@ import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { AspectRatio } from "@/components/ui/aspect-ratio";
 import { Loader2 } from "lucide-react";
-import ChatPanel from '../../components/ChatPanel';
-import RtmpControls from '../../components/RtmpControls';
+import ChatPanel from '../components/ChatPanel';
+import RtmpControls from '../components/RtmpControls';
 
 const ViewStream = () => {
   const [hostStream, setHostStream] = useState(null);
