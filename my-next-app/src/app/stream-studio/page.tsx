@@ -8,6 +8,7 @@ import Peer from 'simple-peer';
 import ChatPanel from '../../components/ChatPanel';
 import RtmpControls from '../../components/RtmpControls';
 import { NEXT_PUBLIC_API_URL } from '@/src/utils/constants';
+import { createStream } from './../../api/stream';
 
 const StreamStudio = () => {
   const [title, setTitle] = useState('');
@@ -42,6 +43,24 @@ const StreamStudio = () => {
     setHostId(storedId);
   }, []);
 
+  function getMediaRecorderOptions({
+    videoBitsPerSecond = 2_500_000,
+    audioBitsPerSecond = 128_000,
+    codecs = ['video/webm;codecs=vp8,opus', 'video/webm;codecs=vp9,opus', 'video/webm']
+  } = {}) {
+    // Pick the first supported MIME type
+    const mimeType =
+      codecs.find(type => MediaRecorder.isTypeSupported(type)) ||
+      codecs.at(-1);
+
+    console.log(`[MediaRecorder] Using codec: ${mimeType}`);
+
+    return {
+      mimeType,
+      videoBitsPerSecond,
+      audioBitsPerSecond
+    };
+  }
 
   // Update refs when state changes
   useEffect(() => {
@@ -72,25 +91,12 @@ const StreamStudio = () => {
   // This effect handles attaching the stream to the video element when both are available
   useEffect(() => {
     if (stream && videoRef.current) {
-      console.log("Setting video source from useEffect...");
-      // Try different methods to ensure video is displayed
-
       try {
         // Method 1: Direct srcObject assignment
         videoRef.current.srcObject = stream;
         videoRef.current.muted = true;
 
-        // Add event listeners to track video loading
-        videoRef.current.onloadedmetadata = () => {
-          console.log("Video metadata loaded!");
-        };
-
-        videoRef.current.onloadeddata = () => {
-          console.log("Video data loaded!");
-        };
-
         videoRef.current.onplaying = () => {
-          console.log("Video is now playing!");
           setCameraReady(true);
         };
 
@@ -104,7 +110,6 @@ const StreamStudio = () => {
         if (playPromise !== undefined) {
           playPromise
             .then(() => {
-              console.log("Video playback started successfully from useEffect");
               setCameraReady(true);
             })
             .catch(e => {
@@ -184,7 +189,6 @@ const StreamStudio = () => {
 
   const getVideoStream = async () => {
     try {
-      console.log("Requesting camera and microphone access...");
 
       // Try a simpler constraint first just to get something working
       const mediaStream = await navigator.mediaDevices.getUserMedia({
@@ -195,26 +199,15 @@ const StreamStudio = () => {
         audio: true
       });
 
-      console.log("Media stream obtained:", mediaStream);
-      console.log("Video tracks:", mediaStream.getVideoTracks().length);
-      console.log("Audio tracks:", mediaStream.getAudioTracks().length);
-
-      // Check active state of tracks
       const videoTrack = mediaStream.getVideoTracks()[0];
-      if (videoTrack) {
-        console.log("Video track settings:", videoTrack.getSettings());
-        console.log("Video track constraints:", videoTrack.getConstraints());
-        console.log("Video track active:", videoTrack.enabled);
-      }
 
       if (mediaStream.getVideoTracks().length === 0) {
         throw new Error("No video track available in the media stream");
       }
 
-      // Just update the state - the useEffect will handle attaching to video
       setStream(mediaStream);
       streamRef.current = mediaStream;
-      setVideoError(null); // Clear any previous errors
+      setVideoError(null);
 
       return mediaStream;
     } catch (err) {
@@ -226,48 +219,28 @@ const StreamStudio = () => {
   };
   const startStreamingToBackend = useCallback((mediaStream, socket) => {
     try {
-      console.log('Starting MediaRecorder for backend streaming...');
-
-      // Check if MediaRecorder is supported
       if (!window.MediaRecorder) {
         throw new Error('MediaRecorder is not supported in this browser');
       }
 
-      // Try different codecs with explicit bitrates
-      let options = {
-        mimeType: 'video/webm;codecs=vp8,opus',
-        videoBitsPerSecond: 2500000,
-        audioBitsPerSecond: 128000
-      };
-
-      if (!MediaRecorder.isTypeSupported(options.mimeType)) {
-        console.log('VP8 not supported, trying VP9...');
-        options = {
-          mimeType: 'video/webm;codecs=vp9,opus',
-          videoBitsPerSecond: 2500000,
-          audioBitsPerSecond: 128000
-        };
-
-        if (!MediaRecorder.isTypeSupported(options.mimeType)) {
-          console.log('VP9 not supported, using default...');
-          options = {
-            mimeType: 'video/webm',
-            videoBitsPerSecond: 2500000,
-            audioBitsPerSecond: 128000
-          };
-        }
-      }
-
+      const options = getMediaRecorderOptions();
+      const recorder = new MediaRecorder(mediaStream, options);
       console.log('Using MediaRecorder with:', options.mimeType);
 
-      const recorder = new MediaRecorder(mediaStream, options);
-
+      let headerSent = false;
       recorder.ondataavailable = async (event) => {
+
+      const ab = await event.data.arrayBuffer();
+
+      if (!headerSent) {
+        socket.emit('stream-data', { roomId: streamDataRef.current.roomId, data: ab, isHeader: true });
+        headerSent = true;
+        return;
+      }
         try {
           if (event.data && event.data.size > 0) {
             const arrayBuffer = await event.data.arrayBuffer();
             if (socket && socket.connected && streamDataRef.current) {
-              // Send raw binary for reliable EBML header and media data delivery
               socket.emit('stream-data', {
                 roomId: streamDataRef.current.roomId,
                 data: arrayBuffer
@@ -285,12 +258,11 @@ const StreamStudio = () => {
       };
 
       recorder.onstop = () => {
-        console.log('MediaRecorder stopped');
         setIsStreamingToBackend(false);
       };
 
       // Start recording with 300ms timeslices for smoother chunking
-      recorder.start(300);
+      recorder.start(1000);
 
       mediaRecorderRef.current = recorder;
       setMediaRecorder(recorder);
@@ -318,6 +290,7 @@ const StreamStudio = () => {
   }, []);
 
   const startStream = async () => {
+    console.log("-------------------- start Stream ------------------------------")
     if (!title.trim()) {
       alert("Please enter a stream title");
       return;
@@ -347,21 +320,7 @@ const StreamStudio = () => {
 
       // Get the stream
       const mediaStream = await getVideoStream();
-
-      // Create a stream in the database
-      const response = await axios.post(NEXT_PUBLIC_API_URL + '/api/streams', {
-        title,
-        hostId
-      });
-
-      // Update state with stream data
-      setStreamData(response.data);
-      streamDataRef.current = response.data;
-
-      // Only now update isStreaming state to trigger re-render
-      setIsStreaming(true);
-
-      // Remove loading overlay
+      
       const loadingElement = document.getElementById('stream-loading');
       if (loadingElement) {
         document.body.removeChild(loadingElement);
@@ -369,16 +328,9 @@ const StreamStudio = () => {
 
       // Connect to socket server - after UI has changed
       setTimeout(() => {
-        // Set up socket connection for streaming
         socketRef.current = io(NEXT_PUBLIC_API_URL);
-
-        // Register user ID with socket
         socketRef.current.emit('register-user', { userId: hostId });
 
-        // Join the room
-        socketRef.current.emit('join-room', response.data.roomId, hostId);
-
-        // *** NEW: Start streaming video data to backend for RTMP ***
         // This will make the video available for FFmpeg to consume
         try {
           startStreamingToBackend(mediaStream, socketRef.current);
@@ -449,7 +401,6 @@ const StreamStudio = () => {
           setPeers(prevPeers => prevPeers.filter(p => p.peerId !== userId));
         });
       }, 500);
-
     } catch (error) {
       // Remove loading overlay on error too
       const loadingElement = document.getElementById('stream-loading');
@@ -458,7 +409,6 @@ const StreamStudio = () => {
       }
 
       console.error('Error starting stream:', error);
-      alert('Failed to start stream. Please try again.');
     }
   };
 
@@ -611,7 +561,7 @@ const StreamStudio = () => {
             </div>
 
             <button
-              onClick={startStream}
+              onClick={() => setIsStreaming(true)}
               className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-lg"
               disabled={!cameraReady || !title.trim()}
             >
@@ -659,8 +609,12 @@ const StreamStudio = () => {
                 <RtmpControls
                   socket={socketRef.current}
                   roomId={streamData?.roomId}
+                  setStreamData = {setStreamData}
+                  streamDataRef = {streamDataRef}
                   userId={hostId}
+                  title={title}
                   isHost={true}
+                  startStream = {startStream}
                 />
               </div>
 
@@ -686,16 +640,6 @@ const StreamStudio = () => {
           </div>
         </div>
       )}
-
-      {/* Debug info */}
-      <div className="mt-4 p-4 bg-gray-900 rounded text-xs">
-        <p>Debug Info:</p>
-        <p>Stream active: {stream ? 'Yes' : 'No'}</p>
-        <p>Camera ready: {cameraReady ? 'Yes' : 'No'}</p>
-        <p>Video tracks: {stream ? stream.getVideoTracks().length : 0}</p>
-        <p>Video ref exists: {videoRef.current ? 'Yes' : 'No'}</p>
-        {videoError && <p className="text-red-400">Error: {videoError}</p>}
-      </div>
     </div>
   );
 };

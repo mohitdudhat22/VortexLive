@@ -6,35 +6,25 @@ import { Input } from './ui/input';
 import { Eye, EyeOff, ChevronDown, ChevronUp, Save, AlertTriangle, Loader2, RefreshCw } from 'lucide-react';
 import io from 'socket.io-client';
 import './RtmpControls.css';
-import { NEXT_PUBLIC_API_URL } from '../utils/constants';
+import { NEXT_PUBLIC_API_URL, PLATFORMS, PLATFORMS_INIT_STATS } from '../utils/constants';
+import { createStream } from '../api/stream';
 
 // Accept socket as an optional prop
-const RtmpControls = ({ socket: externalSocket, roomId, userId, isHost }) => {
+const RtmpControls = ({ socket: externalSocket, roomId, userId, isHost, startStream, setStreamData, streamDataRef, title }) => {
   // Add state for socket management
   const [socket, setSocket] = useState(externalSocket);
   const [socketConnected, setSocketConnected] = useState(false);
   const [connectionError, setConnectionError] = useState(null);
   const [reconnecting, setReconnecting] = useState(false);
   const reconnectAttempts = useRef(0);
-  const maxReconnectAttempts = 5;
   
   // Set expandedView to true by default so inputs are visible from the start
   const [expandedView, setExpandedView] = useState(true);
-  const [destinations, setDestinations] = useState([
-    { platform: 'youtube', streamKey: '', url: 'rtmp://a.rtmp.youtube.com/live2', active: false, enabled: true },
-    { platform: 'facebook', streamKey: '', url: 'rtmp://live-api-s.facebook.com:80/rtmp', active: false, enabled: false },
-    { platform: 'twitch', streamKey: '', url: 'rtmp://live.twitch.tv/app', active: false, enabled: false },
-    { platform: 'custom', streamKey: '', url: '', active: false, enabled: false },
-  ]);
+  const [destinations, setDestinations] = useState(PLATFORMS);
   
   const [isStreaming, setIsStreaming] = useState(false);
   const [showStreamKeys, setShowStreamKeys] = useState({});
-  const [platformStatus, setPlatformStatus] = useState({
-    youtube: { status: 'idle', error: null },
-    facebook: { status: 'idle', error: null },
-    twitch: { status: 'idle', error: null },
-    custom: { status: 'idle', error: null }
-  });
+  const [platformStatus, setPlatformStatus] = useState(PLATFORMS_INIT_STATS);
   const [savedKeys, setSavedKeys] = useState({});
   const localStorageKey = `rtmp-keys-${userId}`;
   
@@ -42,19 +32,14 @@ const RtmpControls = ({ socket: externalSocket, roomId, userId, isHost }) => {
 
   const initSocket = useCallback(() => {
     if (socketRef.current) return socketRef.current;
-
-    // Always prefer backend URL; never fall back to Next.js origin (3001)
-    const API_URL = NEXT_PUBLIC_API_URL || 'http://localhost:5000';
-    
-    console.log('Initializing socket connection to:', API_URL);
-    
-    const newSocket = io(API_URL, {
+        
+    const newSocket = io(NEXT_PUBLIC_API_URL, {
       withCredentials: false,
-      reconnectionAttempts: 10,     // Increased from 5
+      reconnectionAttempts: 10,
       reconnectionDelay: 1000,
       reconnectionDelayMax: 5000,
       randomizationFactor: 0.5,
-      timeout: 20000,               // Adding connection timeout
+      timeout: 20000,
       transports: ['websocket', 'polling']
     });
 
@@ -63,12 +48,6 @@ const RtmpControls = ({ socket: externalSocket, roomId, userId, isHost }) => {
       setSocketConnected(true);
       setConnectionError(null);
       setReconnecting(false);
-    });
-
-    newSocket.on('connect_error', (error) => {
-      console.error('Socket connection error:', error);
-      setSocketConnected(false);
-      setConnectionError(`Connection error: ${error.message}`);
     });
 
     socketRef.current = newSocket;
@@ -143,49 +122,12 @@ const RtmpControls = ({ socket: externalSocket, roomId, userId, isHost }) => {
       }
     };
     
-    const handleConnectError = (error) => {
-      console.error('[RtmpControls] Socket connection error:', {
-        message: error?.message,
-        name: error?.name,
-        description: error?.description
-      });
-      reconnectAttempts.current++;
-      
-      if (reconnectAttempts.current >= maxReconnectAttempts) {
-        setReconnecting(false);
-        setConnectionError(`Connection failed after ${maxReconnectAttempts} attempts. Check your network or server status.`);
-      } else {
-        setConnectionError(`Connection error (attempt ${reconnectAttempts.current}/${maxReconnectAttempts}): ${error.message || 'Unknown error'}`);
-      }
-    };
-    
-    const handleReconnect = (attemptNumber) => {
-      console.log(`Socket reconnection attempt #${attemptNumber}`);
-      setReconnecting(true);
-      reconnectAttempts.current = attemptNumber;
-    };
-    
-    const handleReconnectFailed = () => {
-      console.error('Socket reconnection failed after all attempts');
-      setReconnecting(false);
-      setConnectionError('Failed to reconnect after multiple attempts. Please refresh the page.');
-    };
-    
     // Add event listeners
     currentSocket.on('connect', handleConnect);
     currentSocket.on('disconnect', handleDisconnect);
-    currentSocket.on('connect_error', handleConnectError);
-    currentSocket.on('reconnect', handleReconnect);
-    currentSocket.on('reconnect_attempt', handleReconnect);
-    currentSocket.on('reconnect_failed', handleReconnectFailed);
     
     // Set initial connection state
     setSocketConnected(currentSocket.connected);
-    if (!currentSocket.connected) {
-      const msg = `Connecting to server...`;
-      console.log('[RtmpControls] ', msg);
-      setConnectionError(msg);
-    }
     
     // Clean up
     return () => {
@@ -193,10 +135,6 @@ const RtmpControls = ({ socket: externalSocket, roomId, userId, isHost }) => {
         console.log('[RtmpControls] Cleaning up socket event handlers');
         currentSocket.off('connect', handleConnect);
         currentSocket.off('disconnect', handleDisconnect);
-        currentSocket.off('connect_error', handleConnectError);
-        currentSocket.off('reconnect', handleReconnect);
-        currentSocket.off('reconnect_attempt', handleReconnect);
-        currentSocket.off('reconnect_failed', handleReconnectFailed);
         
         // Only disconnect if we created this socket
         if (!externalSocket && currentSocket) {
@@ -230,119 +168,110 @@ const RtmpControls = ({ socket: externalSocket, roomId, userId, isHost }) => {
   }, [userId, localStorageKey]);
 
   // Set up RTMP stream status listeners
-useEffect(() => {
-  if (!socket || !socketConnected || !roomId) {
-    console.log('Socket not ready for RTMP listeners');
-    return;
-  }
-  
-  console.log('Setting up RTMP stream status listeners');
-
-  const handleStreamStarted = (response) => {
-    console.log('RTMP stream started response:', response);
-    
-    if (response.success) {
-      setIsStreaming(true);
-      
-      // Update platform status to show they're active
-      const platforms = response.destinations || [];
-      setPlatformStatus(prev => {
-        const newStatus = { ...prev };
-        platforms.forEach(platform => {
-          newStatus[platform] = { status: 'streaming', error: null };
-        });
-        return newStatus;
-      });
-      
-      toast.success(response.message || 'Streams starting...');
-    } else {
-      toast.error(response.message || 'Failed to start streams');
-      
-      // Reset platform statuses
-      setPlatformStatus(prev => {
-        const newStatus = { ...prev };
-        Object.keys(newStatus).forEach(platform => {
-          newStatus[platform] = { status: 'idle', error: response.message };
-        });
-        return newStatus;
-      });
+  useEffect(() => {
+    if (!socket || !socketConnected || !roomId) {
+      console.log('Socket not ready for RTMP listeners');
+      return;
     }
-  };
-  
-  const handleStreamError = (response) => {
-    console.error('RTMP stream error:', response);
     
-    if (response.platform) {
-      // Update specific platform status
+    console.log('Setting up RTMP stream status listeners');
+
+    const handleStreamStarted = (response) => {
+      console.log('RTMP stream started response:', response);
+      
+      if (response.success) {
+        setIsStreaming(true);
+        
+        // Update platform status to show they're active
+        const platforms = response.destinations || [];
+        setPlatformStatus(prev => {
+          const newStatus = { ...prev };
+          platforms.forEach(platform => {
+            newStatus[platform] = { status: 'streaming', error: null };
+          });
+          return newStatus;
+        });
+        
+        toast.success(response.message || 'Streams starting...');
+      } else {
+        toast.error(response.message || 'Failed to start streams');
+        
+        // Reset platform statuses
+        setPlatformStatus(prev => {
+          const newStatus = { ...prev };
+          Object.keys(newStatus).forEach(platform => {
+            newStatus[platform] = { status: 'idle', error: response.message };
+          });
+          return newStatus;
+        });
+      }
+    };
+    
+    const handleStreamError = (response) => {
+      console.error('RTMP stream error:', response);
+      
+      if (response.platform) {
+        // Update specific platform status
+        setPlatformStatus(prev => ({
+          ...prev,
+          [response.platform]: {
+            status: 'error',
+            error: response.message
+          }
+        }));
+        
+        toast.error(`${getPlatformName(response.platform)}: ${response.message}`);
+      } else {
+        // General error
+        toast.error(response.message || 'Streaming error occurred');
+      }
+    };
+    
+    const handleStreamStopped = (response) => {
+      console.log('RTMP stream stopped:', response);
+      
+      if (response.success) {
+        setIsStreaming(false);
+        
+        setPlatformStatus(PLATFORMS_INIT_STATS);
+        
+        setDestinations(prev => prev.map(dest => ({ ...dest, active: false })));
+      }
+    };
+    
+    const handlePlatformStatus = (statusUpdate) => {
+      console.log('Platform status update:', statusUpdate);
+      
       setPlatformStatus(prev => ({
         ...prev,
-        [response.platform]: {
-          status: 'error',
-          error: response.message
+        [statusUpdate.platform]: {
+          status: statusUpdate.status,
+          error: statusUpdate.error || null
         }
       }));
       
-      toast.error(`${getPlatformName(response.platform)}: ${response.message}`);
-    } else {
-      // General error
-      toast.error(response.message || 'Streaming error occurred');
-    }
-  };
-  
-  const handleStreamStopped = (response) => {
-    console.log('RTMP stream stopped:', response);
-    
-    if (response.success) {
-      setIsStreaming(false);
-      
-      // Reset all platform statuses
-      setPlatformStatus({
-        youtube: { status: 'idle', error: null },
-        facebook: { status: 'idle', error: null },
-        twitch: { status: 'idle', error: null },
-        custom: { status: 'idle', error: null }
-      });
-      
-      // Update destinations
-      setDestinations(prev => prev.map(dest => ({ ...dest, active: false })));
-      
-      toast.info(response.message || 'Streams stopped');
-    }
-  };
-  
-  const handlePlatformStatus = (statusUpdate) => {
-    console.log('Platform status update:', statusUpdate);
-    
-    setPlatformStatus(prev => ({
-      ...prev,
-      [statusUpdate.platform]: {
-        status: statusUpdate.status,
-        error: statusUpdate.error || null
+      // Show notifications for important status changes
+      if (statusUpdate.status === 'streaming') {
+        toast.success(`${getPlatformName(statusUpdate.platform)} is now streaming!`);
+      } else if (statusUpdate.status === 'error') {
+        toast.error(`${getPlatformName(statusUpdate.platform)}: ${statusUpdate.error}`);
       }
-    }));
+    };
     
-    // Show notifications for important status changes
-    if (statusUpdate.status === 'streaming') {
-      toast.success(`${getPlatformName(statusUpdate.platform)} is now streaming!`);
-    } else if (statusUpdate.status === 'error') {
-      toast.error(`${getPlatformName(statusUpdate.platform)}: ${statusUpdate.error}`);
-    }
-  };
-  
-  // Register event listeners
-  socket.on('rtmp-stream-started', handleStreamStarted);
-  socket.on('rtmp-stream-error', handleStreamError);
-  socket.on('rtmp-stream-stopped', handleStreamStopped);
-  socket.on('rtmp-platform-status', handlePlatformStatus);
-  
-  // Cleanup
-  return () => {
-    socket.off('rtmp-stream-started', handleStreamStarted);
-    socket.off('rtmp-stream-error', handleStreamError);
-    socket.off('rtmp-stream-stopped', handleStreamStopped);
-    socket.off('rtmp-platform-status', handlePlatformStatus);
-  };
-}, [socket, socketConnected, roomId]);
+    // Register event listeners
+    socket.on('rtmp-stream-started', handleStreamStarted);
+    socket.on('rtmp-stream-error', handleStreamError);
+    socket.on('rtmp-stream-stopped', handleStreamStopped);
+    socket.on('rtmp-platform-status', handlePlatformStatus);
+    
+    // Cleanup
+    return () => {
+      socket.off('rtmp-stream-started', handleStreamStarted);
+      socket.off('rtmp-stream-error', handleStreamError);
+      socket.off('rtmp-stream-stopped', handleStreamStopped);
+      socket.off('rtmp-platform-status', handlePlatformStatus);
+    };
+  }, [socket, socketConnected, roomId]);
   
   // Handle platform toggle
   const handleTogglePlatform = (platform) => {
@@ -356,9 +285,6 @@ useEffect(() => {
   
   // Handle input change
   const handleInputChange = (platform, value, field = 'streamKey') => {
-    // Avoid logging sensitive values
-    const redacted = value ? `${value.substring(0, 3)}***` : '';
-    console.log('[RtmpControls] Input change', { platform, field, value: redacted });
     setDestinations(prev => prev.map(dest => 
       dest.platform === platform 
         ? { ...dest, [field]: value } 
@@ -386,16 +312,13 @@ useEffect(() => {
     try {
       localStorage.setItem(localStorageKey, JSON.stringify(keys));
       setSavedKeys(keys);
-      console.log('[RtmpControls] Stream keys saved for platforms', Object.keys(keys));
-      toast.success('Stream keys saved!');
     } catch (error) {
       console.error('Error saving stream keys:', error);
-      toast.error('Failed to save stream keys.');
     }
   };
   
   // Start streaming
-  const handleStartStreaming = () => {
+  const handleStartStreaming = async () => {
     try {
       // Filter enabled destinations
       const enabledDestinations = destinations.filter(dest => dest.enabled);
@@ -408,7 +331,6 @@ useEffect(() => {
       // Enhanced logging for debugging RTMP streaming startup
       if (enabledDestinations.length === 0) {
         console.warn('[RtmpControls] No enabled streaming platforms selected', { userId, roomId });
-        toast.warning('Please enable at least one streaming platform');
         return;
       }
 
@@ -418,7 +340,6 @@ useEffect(() => {
         const platforms = missingKeys.map(d => getPlatformName(d.platform)).join(', ');
         // eslint-disable-next-line no-console
         console.warn(`[RtmpControls] Missing stream keys for: ${platforms}`);
-        toast.error(`Missing stream keys for: ${platforms}`);
         return;
       }
 
@@ -427,14 +348,12 @@ useEffect(() => {
       if (customDest && (!customDest.url || !customDest.url.trim())) {
         // eslint-disable-next-line no-console
         console.warn('[RtmpControls] Missing custom RTMP URL');
-        toast.error('Please enter a custom RTMP URL');
         return;
       }
 
       if (!socket || !socketConnected) {
         // eslint-disable-next-line no-console
         console.warn('[RtmpControls] Socket not connected when starting stream');
-        toast.error('Not connected to server. Please wait or refresh the page.');
         return;
       }
       
@@ -456,15 +375,21 @@ useEffect(() => {
         });
         return newStatus;
       });
-      console.log(enabledDestinations,"<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<, start-rtmp-stream")
+      
+      // Create a stream in the database (so we can have the roomId)
+      const response = await createStream(title, userId);
+      console.log(response);
+      setStreamData(response);
+      streamDataRef.current = response.data;
+      socket.emit('join-room', response.data.roomId, userId);
       // Send start command to backend
       socket.emit('start-rtmp-stream', { 
-        roomId, 
+        roomId: response.data.roomId, 
         userId,
         destinations: enabledDestinations 
       });
+      startStream();
       
-      toast.info('Initializing streams...');
       
     } catch (error) {
       console.error('Error starting stream:', error);
@@ -475,25 +400,16 @@ useEffect(() => {
   // Trigger a short FFmpeg lavfi test stream for a destination
   const handleTestDestination = (dest) => {
     try {
-      if (!socket || !socketConnected) {
-        toast.error('Not connected to server.');
-        return;
-      }
-      if (!roomId) {
-        toast.error('Room not set.');
-        return;
-      }
       if (!dest.streamKey || !dest.streamKey.trim()) {
-        toast.error(`Enter a ${getPlatformName(dest.platform)} stream key first`);
+        console.log(`Enter a ${getPlatformName(dest.platform)} stream key first`);
         return;
       }
       // For custom platform ensure URL exists
       if (dest.platform === 'custom' && (!dest.url || !dest.url.trim())) {
-        toast.error('Enter a custom RTMP URL');
+        console.log('Enter a custom RTMP URL');
         return;
       }
       const payload = {
-        roomId,
         platform: dest.platform,
         url: dest.url,
         streamKey: dest.streamKey,
@@ -508,10 +424,8 @@ useEffect(() => {
         [dest.platform]: { status: 'connecting', error: null }
       }));
       socket.emit('test-rtmp-stream', payload);
-      toast.info(`Testing ${getPlatformName(dest.platform)} for 10s...`);
     } catch (e) {
       console.error('Test emit failed', e);
-      toast.error('Failed to start test stream');
     }
   };
   
@@ -538,7 +452,7 @@ useEffect(() => {
   };
   
   const getPlatformIcon = (platform) => {
-    return '📺'; // Use actual icons in a real implementation
+    return '📺';
   };
   
   const getStatusColor = (status) => {
@@ -568,18 +482,12 @@ useEffect(() => {
       console.log('[RtmpControls] Socket not ready for RTMP listeners');
       return;
     }
-    
-    console.log('[RtmpControls] Setting up RTMP listeners');
-    
-    // Set up your RTMP listeners here...
-    
+
     return () => {
       if (socket) {
-        // Only remove specific RTMP-related listeners
         socket.off('rtmp-status');
         socket.off('stream-started');
         socket.off('stream-ended');
-        // ... other RTMP event listeners
       }
     };
   }, [socket, socket?.connected]);
@@ -703,7 +611,6 @@ useEffect(() => {
                       size="sm"
                       variant="outline"
                       onClick={() => handleTestDestination(dest)}
-                      disabled={!socketConnected || isStreaming}
                     >
                       Test {getPlatformName(dest.platform)}
                     </Button>
