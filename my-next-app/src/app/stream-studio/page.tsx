@@ -7,8 +7,9 @@ import io from 'socket.io-client';
 import Peer from 'simple-peer';
 import ChatPanel from '../../components/ChatPanel';
 import RtmpControls from '../../components/RtmpControls';
-import { NEXT_PUBLIC_API_URL } from '@/src/utils/constants';
-import { createStream } from './../../api/stream';
+import { NEXT_PUBLIC_API_BASE_URL, NEXT_PUBLIC_API_URL } from '@/src/utils/constants';
+import { createStream, markStream } from './../../api/stream';
+import { hideLoadingState, showLoadingState } from './index';
 
 const StreamStudio = () => {
   const [title, setTitle] = useState('');
@@ -20,19 +21,18 @@ const StreamStudio = () => {
   const [cameraReady, setCameraReady] = useState(false);
   const [videoError, setVideoError] = useState(null);
   const [hostId, setHostId] = useState(null);
-  const [mediaRecorder, setMediaRecorder] = useState(null);
   const [isStreamingToBackend, setIsStreamingToBackend] = useState(false);
-  const mediaRecorderRef = useRef(null);
 
-
-  const videoRef = useRef();
-  const socketRef = useRef();
+  // refs
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const socketRef = useRef<any>(null);
   const peersRef = useRef([]);
+  const playTokenRef = useRef(0);
 
-  // Create refs to keep track of latest state values
+  // latest-state refs to avoid stale closures
   const streamRef = useRef(null);
   const streamDataRef = useRef(null);
-
+  const mediaRecorderRef = useRef(null);
 
   useEffect(() => {
     let storedId = localStorage.getItem('userId');
@@ -43,26 +43,6 @@ const StreamStudio = () => {
     setHostId(storedId);
   }, []);
 
-  function getMediaRecorderOptions({
-    videoBitsPerSecond = 2_500_000,
-    audioBitsPerSecond = 128_000,
-    codecs = ['video/webm;codecs=vp8,opus', 'video/webm;codecs=vp9,opus', 'video/webm']
-  } = {}) {
-    // Pick the first supported MIME type
-    const mimeType =
-      codecs.find(type => MediaRecorder.isTypeSupported(type)) ||
-      codecs.at(-1);
-
-    console.log(`[MediaRecorder] Using codec: ${mimeType}`);
-
-    return {
-      mimeType,
-      videoBitsPerSecond,
-      audioBitsPerSecond
-    };
-  }
-
-  // Update refs when state changes
   useEffect(() => {
     streamRef.current = stream;
   }, [stream]);
@@ -71,353 +51,385 @@ const StreamStudio = () => {
     streamDataRef.current = streamData;
   }, [streamData]);
 
-  // Save the user ID to localStorage if it doesn't exist
   useEffect(() => {
-    if (!localStorage.getItem('userId')) {
+    if (!localStorage.getItem('userId') && hostId) {
       localStorage.setItem('userId', hostId);
     }
   }, [hostId]);
 
-  // Get camera on component mount
+  // Helper: choose MediaRecorder options
+  function getMediaRecorderOptions({
+    videoBitsPerSecond = 200_000,
+    audioBitsPerSecond = 32_000,
+    codecs = ['video/webm;codecs=vp8,opus', 'video/webm;codecs=vp9,opus', 'video/webm']
+  } = {}) {
+    const mimeType = codecs.find(t => {
+      try {
+        return MediaRecorder.isTypeSupported(t);
+      } catch {
+        return false;
+      }
+    }) || codecs.at(-1);
+
+    console.log('[MediaRecorder] Using codec:', mimeType);
+    return {
+      mimeType,
+      videoBitsPerSecond,
+      audioBitsPerSecond
+    };
+  }
+
+  // Get camera on mount (but only if no stream)
   useEffect(() => {
-    if (!isStreaming && !stream) {
-      getVideoStream().catch(err => {
-        console.error("Initial camera setup failed:", err);
-        setVideoError("Could not access camera: " + err.message);
-      });
-    }
+    let mounted = true;
+    (async () => {
+      if (!streamRef.current) {
+        try {
+          const ms = await getVideoStream();
+          if (mounted) {
+            setStream(ms);
+          }
+        } catch (err) {
+          console.error('Initial camera setup failed:', err);
+        }
+      }
+    })();
+    return () => { mounted = false; };
   }, []);
 
-  // This effect handles attaching the stream to the video element when both are available
+  // Robust attach: attaches stream to <video> and handles play races + user-interaction fallback
   useEffect(() => {
-    if (stream && videoRef.current) {
+    const vid = videoRef.current;
+    const currentStream = stream;
+    if (!vid || !currentStream) return;
+
+    const myToken = ++playTokenRef.current;
+    let cleanedUp = false;
+
+    // prepare video element
+    try {
+      vid.muted = true;
+      vid.playsInline = true;
+      vid.autoplay = false; // we'll call play programmatically
+      vid.style.objectFit = vid.style.objectFit || 'contain';
+    } catch (e) { }
+
+    // attach stream
+    try {
+      vid.srcObject = currentStream;
+    } catch (e) {
+      console.warn('Could not set srcObject directly:', e);
       try {
-        // Method 1: Direct srcObject assignment
-        videoRef.current.srcObject = stream;
-        videoRef.current.muted = true;
+        // fallback: create object URL (shouldn't be necessary for MediaStream but safe)
+        // @ts-ignore
+        vid.src = URL.createObjectURL(currentStream);
+      } catch { }
+    }
 
-        videoRef.current.onplaying = () => {
+    const setErr = (msg) => {
+      try { setVideoError(msg); } catch { }
+    };
+
+    const onCanPlay = () => {
+      if (cleanedUp || myToken !== playTokenRef.current) return;
+      attemptPlay().catch(() => { });
+    };
+    const onPlaying = () => {
+      if (myToken !== playTokenRef.current) return;
+      setCameraReady(true);
+      setVideoError(null);
+    };
+    const onError = (ev) => {
+      console.error('Video element error:', ev);
+      const msg = (ev?.target?.error?.message) || 'Unknown video error';
+      setErr('Video element error: ' + msg);
+    };
+
+    vid.addEventListener('loadedmetadata', onCanPlay);
+    vid.addEventListener('canplay', onCanPlay);
+    vid.addEventListener('playing', onPlaying);
+    vid.addEventListener('error', onError);
+
+    let safetyTimeout = setTimeout(() => {
+      if (myToken === playTokenRef.current) attemptPlay().catch(() => { });
+    }, 1200);
+
+    async function attemptPlay(retries = 2) {
+      if (cleanedUp || myToken !== playTokenRef.current) return;
+      try {
+        const p = vid.play();
+        if (p) await p;
+        if (myToken === playTokenRef.current) {
           setCameraReady(true);
-        };
-
-        videoRef.current.onerror = (e) => {
-          console.error("Video element error:", e);
-          setVideoError("Video element error: " + e.target.error?.message || "Unknown error");
-        };
-
-        // Force a play attempt
-        const playPromise = videoRef.current.play();
-        if (playPromise !== undefined) {
-          playPromise
-            .then(() => {
-              setCameraReady(true);
-            })
-            .catch(e => {
-              console.error("Error playing video from useEffect:", e);
-
-              // Try Method 2: Create a fallback video element if the first one fails
-              console.log("Trying fallback method...");
-              const fallbackVideo = document.createElement('video');
-              fallbackVideo.autoplay = true;
-              fallbackVideo.playsInline = true;
-              fallbackVideo.muted = true;
-              fallbackVideo.width = videoRef.current.clientWidth;
-              fallbackVideo.height = videoRef.current.clientHeight;
-              fallbackVideo.style.width = '100%';
-              fallbackVideo.style.height = '100%';
-              fallbackVideo.style.objectFit = 'contain';
-              fallbackVideo.style.backgroundColor = 'black';
-              fallbackVideo.srcObject = stream;
-
-              // Try to play the fallback
-              fallbackVideo.play()
-                .then(() => {
-                  console.log("Fallback video playing!");
-
-                  // Replace the original video
-                  if (videoRef.current && videoRef.current.parentNode) {
-                    videoRef.current.parentNode.replaceChild(fallbackVideo, videoRef.current);
-                    videoRef.current = fallbackVideo; // Update the ref
-                    setCameraReady(true);
-                  }
-                })
-                .catch(fallbackErr => {
-                  console.error("Fallback also failed:", fallbackErr);
-
-                  // Final option: Create a button for user interaction
-                  const playButton = document.createElement('button');
-                  playButton.textContent = 'Click to enable camera';
-                  playButton.style.position = 'absolute';
-                  playButton.style.top = '50%';
-                  playButton.style.left = '50%';
-                  playButton.style.transform = 'translate(-50%, -50%)';
-                  playButton.style.zIndex = '1000';
-                  playButton.style.padding = '10px 20px';
-                  playButton.style.backgroundColor = '#3b82f6';
-                  playButton.style.color = 'white';
-                  playButton.style.border = 'none';
-                  playButton.style.borderRadius = '5px';
-                  playButton.style.cursor = 'pointer';
-
-                  const videoContainer = videoRef.current.parentElement;
-                  if (videoContainer) {
-                    videoContainer.style.position = 'relative';
-                    videoContainer.appendChild(playButton);
-
-                    playButton.onclick = () => {
-                      videoRef.current.play()
-                        .then(() => {
-                          console.log("Video playback started after user interaction");
-                          videoContainer.removeChild(playButton);
-                          setCameraReady(true);
-                        })
-                        .catch(err => {
-                          console.error("Still can't play video after user interaction:", err);
-                          setVideoError("Could not access camera. Please check your permissions and try again.");
-                        });
-                    };
-                  }
-                });
-            });
+          setVideoError(null);
         }
       } catch (err) {
-        console.error("Error attaching stream to video:", err);
-        setVideoError("Error displaying camera: " + err.message);
+        const name = err?.name || err?.message || String(err);
+        console.warn('video.play() failed:', name);
+        if (err && err.name === 'AbortError') {
+          // race: wait a bit and retry if still current
+          if (myToken === playTokenRef.current && retries > 0) {
+            await new Promise(r => setTimeout(r, 60));
+            return attemptPlay(retries - 1);
+          }
+          return;
+        }
+        if (err && err.name === 'NotAllowedError') {
+          // requires user gesture -> show button
+          createPlayButton();
+          setErr('Playback requires user interaction. Click the button to enable camera.');
+          return;
+        }
+        setErr('Could not play video: ' + (err?.message || String(err)));
       }
     }
-  }, [stream, videoRef.current]);
 
+    function createPlayButton() {
+      if (!vid.parentElement) return;
+      const container = vid.parentElement;
+      const existing = container.querySelector('[data-video-play-button]');
+      if (existing) return;
+
+      const btn = document.createElement('button');
+      btn.setAttribute('data-video-play-button', '1');
+      btn.textContent = 'Enable camera';
+      Object.assign(btn.style, {
+        position: 'absolute',
+        top: '50%',
+        left: '50%',
+        transform: 'translate(-50%,-50%)',
+        zIndex: '9999',
+        padding: '10px 16px',
+        borderRadius: '6px',
+        border: 'none',
+        cursor: 'pointer',
+        background: '#2563eb',
+        color: 'white'
+      });
+
+      if (getComputedStyle(container).position === 'static') {
+        container.style.position = 'relative';
+      }
+
+      container.appendChild(btn);
+
+      const onClick = async () => {
+        try {
+          await vid.play();
+          setCameraReady(true);
+          setVideoError(null);
+          if (btn.parentElement) btn.parentElement.removeChild(btn);
+        } catch (e) {
+          console.error('User initiated play failed:', e);
+          setVideoError('Could not start camera after user interaction.');
+        }
+      };
+
+      btn.addEventListener('click', onClick, { once: true });
+    }
+
+    // initial attempt if ready
+    if (vid.readyState >= 1) {
+      attemptPlay().catch(() => { });
+    }
+
+    return () => {
+      cleanedUp = true;
+      clearTimeout(safetyTimeout);
+      try {
+        vid.removeEventListener('loadedmetadata', onCanPlay);
+        vid.removeEventListener('canplay', onCanPlay);
+        vid.removeEventListener('playing', onPlaying);
+        vid.removeEventListener('error', onError);
+      } catch (e) { }
+      // detach srcObject to avoid leaks
+      try {
+        if (vid.srcObject === currentStream) vid.srcObject = null;
+      } catch (e) { }
+    };
+    // intentionally only depend on `stream` (videoRef is stable)
+  }, [stream]);
+
+  // get camera
   const getVideoStream = async () => {
     try {
-
-      // Try a simpler constraint first just to get something working
       const mediaStream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          width: { ideal: 1280 },
-          height: { ideal: 720 }
-        },
+        video: { width: { ideal: 1280 }, height: { ideal: 720 } },
         audio: true
       });
 
-      const videoTrack = mediaStream.getVideoTracks()[0];
-
-      if (mediaStream.getVideoTracks().length === 0) {
-        throw new Error("No video track available in the media stream");
+      if (!mediaStream || mediaStream.getVideoTracks().length === 0) {
+        throw new Error('No video track available');
       }
 
       setStream(mediaStream);
       streamRef.current = mediaStream;
       setVideoError(null);
-
       return mediaStream;
     } catch (err) {
-      console.error("Error accessing media devices:", err);
-      setVideoError("Failed to access camera: " + err.message);
-      alert(`Failed to access camera and microphone: ${err.message}. Please ensure you've granted camera permission and no other app is using the camera.`);
+      console.error('Error accessing media devices:', err);
+      const msg = err?.message || 'Failed to access camera';
+      setVideoError('Failed to access camera: ' + msg);
+      alert(`Failed to access camera and microphone: ${msg}. Please ensure permissions are granted and no other app is using the camera.`);
       throw err;
     }
   };
+  const MAX_CLIENT_QUEUE_BYTES = 0.5 * 1024 * 1024; // 2 MB local buffer cap
+  let clientQueueBytes = 0;
+  let pausedByBackpressure = false;
+  let resumeTimer = null;
+
+  function arrayBufferToBase64(ab) {
+    // fast-ish conversion
+    let binary = '';
+    const bytes = new Uint8Array(ab);
+    const chunk = 0x8000;
+    for (let i = 0; i < bytes.length; i += chunk) {
+      binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+    }
+    return btoa(binary);
+  }
+
+
   const startStreamingToBackend = useCallback((mediaStream, socket) => {
+    if (!mediaStream) throw new Error('No media stream supplied');
+    if (!window.MediaRecorder) throw new Error('MediaRecorder is not supported');
+
+    const options = getMediaRecorderOptions();
+    let headerSent = false;
+    let recorder;
+
     try {
-      if (!window.MediaRecorder) {
-        throw new Error('MediaRecorder is not supported in this browser');
-      }
+      recorder = new MediaRecorder(mediaStream, options);
 
-      const options = getMediaRecorderOptions();
-      const recorder = new MediaRecorder(mediaStream, options);
-      console.log('Using MediaRecorder with:', options.mimeType);
-
-      let headerSent = false;
       recorder.ondataavailable = async (event) => {
+        if (!event.data || event.data.size === 0) return;
 
-      const ab = await event.data.arrayBuffer();
+        // convert to ArrayBuffer then to base64 (server expects base64)
+        const ab = await event.data.arrayBuffer();
+        const b64 = arrayBufferToBase64(ab);
+        const payload = { roomId: streamDataRef.current.roomId, data: b64, isHeader: !headerSent };
 
-      if (!headerSent) {
-        socket.emit('stream-data', { roomId: streamDataRef.current.roomId, data: ab, isHeader: true });
-        headerSent = true;
-        return;
-      }
-        try {
-          if (event.data && event.data.size > 0) {
-            const arrayBuffer = await event.data.arrayBuffer();
-            if (socket && socket.connected && streamDataRef.current) {
-              socket.emit('stream-data', {
-                roomId: streamDataRef.current.roomId,
-                data: arrayBuffer
-              });
+        // If header hasn't been sent, mark it and send without queue logic
+        if (!headerSent) {
+          headerSent = true;
+          socket.emit('stream-data', payload, (ack) => {
+            // server may immediately request more; handle ack if returned
+            if (ack && ack.shouldContinue === false) {
+              pauseForBackpressure();
             }
-          }
-        } catch (e) {
-          console.error('ondataavailable error:', e);
+          });
+          return;
         }
+
+        // Normal chunk: send with ack and apply backpressure logic
+        // If we're already paused due to backpressure, buffer locally (bounded)
+        if (pausedByBackpressure) {
+          // simple bounded buffer: we just drop if full (or you can stop recorder)
+          clientQueueBytes += b64.length * (3 / 4); // approx decode size
+          if (clientQueueBytes > MAX_CLIENT_QUEUE_BYTES) {
+            console.warn('Local send queue too large — stopping recorder to avoid memory blowup');
+            recorder.pause();
+            // optionally notify user
+          } else {
+            // store it in a local queue store if you want to retry later
+            localPendingChunks.push(payload); // create `localPendingChunks` array in outer scope
+          }
+          return;
+        }
+
+        // Send with ack — server should reply { shouldContinue: true/false }
+        socket.emit('stream-data', payload, (ack) => {
+          if (!ack) return;
+          if (ack.shouldContinue === false) {
+            // server is overwhelmed — pause recorder locally
+            pauseForBackpressure();
+          }
+        });
       };
 
-      recorder.onerror = (error) => {
-        console.error('MediaRecorder error:', error);
-        toast.error('Video recording error: ' + error.message);
+      recorder.onerror = (err) => {
+        console.error('MediaRecorder error', err);
+        setVideoError('Video recording error: ' + (err?.message || String(err)));
       };
 
       recorder.onstop = () => {
+        console.log('MediaRecorder stopped');
         setIsStreamingToBackend(false);
       };
 
-      // Start recording with 300ms timeslices for smoother chunking
-      recorder.start(1000);
-
+      recorder.start(1000); // 1s slices
       mediaRecorderRef.current = recorder;
-      setMediaRecorder(recorder);
       setIsStreamingToBackend(true);
 
-      console.log('MediaRecorder started successfully');
       return recorder;
-
-    } catch (error) {
-      console.error('Error starting MediaRecorder:', error);
-      toast.error('Failed to start video streaming: ' + error.message);
-      throw error;
-    }
-  }, []);
-
-  // Add this function to stop streaming to backend
-  const stopStreamingToBackend = useCallback(() => {
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-      console.log('Stopping MediaRecorder...');
-      mediaRecorderRef.current.stop();
-      mediaRecorderRef.current = null;
-      setMediaRecorder(null);
-      setIsStreamingToBackend(false);
-    }
-  }, []);
-
-  const startStream = async () => {
-    console.log("-------------------- start Stream ------------------------------")
-    if (!title.trim()) {
-      alert("Please enter a stream title");
-      return;
+    } catch (err) {
+      console.error('Failed to create/start MediaRecorder:', err);
+      setVideoError('Failed to start video streaming: ' + (err?.message || String(err)));
+      throw err;
     }
 
-    try {
-      // Show loading state
-      const loadingElem = document.createElement('div');
-      loadingElem.id = 'stream-loading';
-      loadingElem.style.position = 'fixed';
-      loadingElem.style.top = '0';
-      loadingElem.style.left = '0';
-      loadingElem.style.right = '0';
-      loadingElem.style.bottom = '0';
-      loadingElem.style.backgroundColor = 'rgba(0,0,0,0.7)';
-      loadingElem.style.display = 'flex';
-      loadingElem.style.alignItems = 'center';
-      loadingElem.style.justifyContent = 'center';
-      loadingElem.style.zIndex = '9999';
-      loadingElem.innerHTML = '<div style="color:white;text-align:center;"><div style="display:inline-block;width:40px;height:40px;border:3px solid #fff;border-radius:50%;border-top-color:transparent;animation:spin 1s linear infinite;"></div><div style="margin-top:10px;">Starting stream...</div></div>';
-      document.body.appendChild(loadingElem);
-
-      // Define the animation
-      const style = document.createElement('style');
-      style.innerHTML = '@keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }';
-      document.head.appendChild(style);
-
-      // Get the stream
-      const mediaStream = await getVideoStream();
-      
-      const loadingElement = document.getElementById('stream-loading');
-      if (loadingElement) {
-        document.body.removeChild(loadingElement);
-      }
-
-      // Connect to socket server - after UI has changed
-      setTimeout(() => {
-        socketRef.current = io(NEXT_PUBLIC_API_URL);
-        socketRef.current.emit('register-user', { userId: hostId });
-
-        // This will make the video available for FFmpeg to consume
-        try {
-          startStreamingToBackend(mediaStream, socketRef.current);
-          console.log('Started streaming video data to backend');
-        } catch (error) {
-          console.error('Failed to start backend streaming:', error);
-          toast.error('Warning: External streaming may not work');
-        }
-
-        // Listen for server request to resend fresh WebM header (restart MediaRecorder)
-        socketRef.current.on('request-media-header', ({ roomId: reqRoom }) => {
-          if (!streamDataRef.current || reqRoom !== streamDataRef.current.roomId) return;
-          console.log('[StreamStudio] Received request-media-header, restarting MediaRecorder...');
-          try {
-            stopStreamingToBackend();
-            // Small delay to ensure recorder stops
-            setTimeout(() => {
-              if (streamRef.current) {
-                startStreamingToBackend(streamRef.current, socketRef.current);
-                console.log('[StreamStudio] MediaRecorder restarted to resend header');
-              }
-            }, 150);
-          } catch (e) {
-            console.error('Failed to restart MediaRecorder on header request:', e);
-          }
-        });
-
-        // Handle new viewer connections
-        socketRef.current.on('user-connected', (userId) => {
-          console.log('New viewer connected:', userId);
-          setViewerCount(prev => prev + 1);
-
-          // Use the refs to access the latest values
-          if (streamRef.current && streamDataRef.current) {
-            const peer = createPeer(userId, hostId, streamRef.current);
-            peersRef.current.push({
-              peerId: userId,
-              peer,
-            });
-
-            setPeers(prevPeers => [...prevPeers, { peerId: userId, peer }]);
+    // helpers inside same scope:
+    function pauseForBackpressure() {
+      if (pausedByBackpressure) return;
+      console.info('Pausing recorder due to server backpressure');
+      pausedByBackpressure = true;
+      try { recorder.pause(); } catch (e) { }
+      // set a timer to check back in X ms; server can also send explicit resume
+      resumeTimer = setTimeout(() => {
+        // Ask server for permission to resume (emit a "can-resume" event)
+        socket.emit('can-resume', { roomId: streamDataRef.current.roomId }, (resp) => {
+          if (resp && resp.shouldResume === true) {
+            resumeFromBackpressure();
           } else {
-            console.error('Cannot create peer: stream or streamData is not available');
-            console.log('Stream available:', !!streamRef.current);
-            console.log('StreamData available:', !!streamDataRef.current);
+            // if still not ok, schedule another try with exponential backoff
+            // keep it simple here and try again in 1000ms
+            setTimeout(() => socket.emit('can-resume', { roomId: streamDataRef.current.roomId }, (r) => {
+              if (r?.shouldResume) resumeFromBackpressure();
+            }), 1000);
           }
         });
-
-        // Handle signals from viewers
-        socketRef.current.on('user-signal', ({ userId, signal }) => {
-          const item = peersRef.current.find(p => p.peerId === userId);
-          if (item) {
-            item.peer.signal(signal);
-          }
-        });
-
-        // Handle viewer disconnections
-        socketRef.current.on('user-disconnected', (userId) => {
-          console.log('Viewer disconnected:', userId);
-          setViewerCount(prev => Math.max(0, prev - 1));
-
-          const peerObj = peersRef.current.find(p => p.peerId === userId);
-          if (peerObj) {
-            peerObj.peer.destroy();
-          }
-
-          peersRef.current = peersRef.current.filter(p => p.peerId !== userId);
-          setPeers(prevPeers => prevPeers.filter(p => p.peerId !== userId));
-        });
-      }, 500);
-    } catch (error) {
-      // Remove loading overlay on error too
-      const loadingElement = document.getElementById('stream-loading');
-      if (loadingElement) {
-        document.body.removeChild(loadingElement);
-      }
-
-      console.error('Error starting stream:', error);
+      }, 500); // initial wait
     }
-  };
 
-  // The rest of your code remains the same
-  const createPeer = (viewerId, hostId, stream) => {
+    function resumeFromBackpressure() {
+      if (!pausedByBackpressure) return;
+      console.info('Resuming recorder after backpressure cleared');
+      pausedByBackpressure = false;
+      try { recorder.resume(); } catch (e) { }
+      // flush localPendingChunks if you kept them
+      while (localPendingChunks.length && !pausedByBackpressure) {
+        const p = localPendingChunks.shift();
+        clientQueueBytes -= p.data.length * (3 / 4);
+        socket.emit('stream-data', p, (ack) => {
+          if (ack?.shouldContinue === false) {
+            pauseForBackpressure();
+          }
+        });
+      }
+      if (resumeTimer) { clearTimeout(resumeTimer); resumeTimer = null; }
+    }
+  }, []);
+
+  const stopStreamingToBackend = useCallback(() => {
+    try {
+      const r = mediaRecorderRef.current;
+      if (r && r.state !== 'inactive') {
+        r.stop();
+      }
+      mediaRecorderRef.current = null;
+      setIsStreamingToBackend(false);
+    } catch (e) {
+      console.warn('Error stopping MediaRecorder:', e);
+    }
+  }, []);
+
+  // Create peer (for viewers)
+  const createPeer = (viewerId, hostIdLocal, mediaStream) => {
     const peer = new Peer({
       initiator: true,
       trickle: false,
-      stream,
+      stream: mediaStream,
       config: {
         iceServers: [
           { urls: 'stun:stun.l.google.com:19302' },
@@ -426,50 +438,139 @@ const StreamStudio = () => {
       }
     });
 
-    peer.on('signal', signal => {
+    peer.on('signal', (signal) => {
       if (socketRef.current && streamDataRef.current && streamDataRef.current.roomId) {
-        console.log('Host sending signal to viewer', viewerId);
         socketRef.current.emit('signal', {
-          userId: hostId,
+          userId: hostIdLocal,
           roomId: streamDataRef.current.roomId,
           targetUserId: viewerId,
           signal
         });
       } else {
-        console.error('Cannot emit signal: streamData or socketRef is not available');
-        console.log('SocketRef available:', !!socketRef.current);
-        console.log('StreamData available:', !!streamDataRef.current);
-        if (streamDataRef.current) {
-          console.log('RoomId available:', !!streamDataRef.current.roomId);
-        }
+        console.error('Cannot emit signal: missing socket or streamData');
       }
     });
 
     return peer;
   };
 
+  // startStream: create stream record, then connect socket and start media recorder & peer handling
+  const startStream = async () => {
+    if (!title.trim()) {
+      alert('Please enter a stream title');
+      return;
+    }
+
+    setVideoError(null);
+    showLoadingState('Starting stream...');
+
+    try {
+      // ensure we have a camera stream
+      const mediaStream = streamRef.current || await getVideoStream();
+      if (!mediaStream) throw new Error('No media stream available');
+
+      // create stream record on server (so we have roomId, _id)
+      let created;
+      try {
+        created = await createStream(title, hostId);
+        setStreamData(created);
+        streamDataRef.current = created;
+      } catch (apiErr) {
+        console.warn('createStream failed, attempting fallback via direct API POST', apiErr);
+        // fallback: try direct HTTP call if createStream helper fails
+        const resp = await axios.post(`${NEXT_PUBLIC_API_URL}/streams`, { title, hostId });
+        created = resp.data;
+        setStreamData(created);
+        streamDataRef.current = created;
+      }
+
+      // connect socket
+      socketRef.current = io(NEXT_PUBLIC_API_BASE_URL, { transports: ['websocket'] });
+      socketRef.current.on('connect', () => {
+        socketRef.current.emit('register-user', { userId: hostId });
+      });
+
+      // start sending to backend (MediaRecorder -> socket)
+      try {
+        startStreamingToBackend(mediaStream, socketRef.current);
+      } catch (e) {
+        console.error('startStreamingToBackend error:', e);
+      }
+
+      // socket events
+      socketRef.current.on('request-media-header', ({ roomId: reqRoom }) => {
+        if (!streamDataRef.current || reqRoom !== streamDataRef.current.roomId) return;
+        try {
+          stopStreamingToBackend();
+          setTimeout(() => {
+            if (streamRef.current) startStreamingToBackend(streamRef.current, socketRef.current);
+          }, 150);
+        } catch (e) {
+          console.error('Failed to restart recorder on header request:', e);
+        }
+      });
+
+      socketRef.current.on('user-connected', (userId) => {
+        console.log('New viewer connected:', userId);
+        setViewerCount(v => v + 1);
+
+        if (streamRef.current && streamDataRef.current) {
+          const peer = createPeer(userId, hostId, streamRef.current);
+          peersRef.current.push({ peerId: userId, peer });
+          setPeers(prev => [...prev, { peerId: userId, peer }]);
+        } else {
+          console.error('Missing stream or streamData while creating peer');
+        }
+      });
+
+      socketRef.current.on('user-signal', ({ userId, signal }) => {
+        const item = peersRef.current.find(p => p.peerId === userId);
+        if (item) {
+          item.peer.signal(signal);
+        }
+      });
+
+      socketRef.current.on('user-disconnected', (userId) => {
+        console.log('Viewer disconnected:', userId);
+        setViewerCount(v => Math.max(0, v - 1));
+        const peerObj = peersRef.current.find(p => p.peerId === userId);
+        if (peerObj) peerObj.peer.destroy();
+        peersRef.current = peersRef.current.filter(p => p.peerId !== userId);
+        setPeers(prev => prev.filter(p => p.peerId !== userId));
+      });
+
+      // mark streaming state
+      setIsStreaming(true);
+      hideLoadingState();
+    } catch (err) {
+      console.error('Error starting stream:', err);
+      hideLoadingState();
+      setVideoError('Error starting stream: ' + (err?.message || String(err)));
+      alert('Failed to start stream: ' + (err?.message || String(err)));
+    }
+  };
+
+  // stop stream
   const stopStream = async () => {
     try {
-      // *** NEW: Stop streaming video data to backend ***
+      hideLoadingState();
       stopStreamingToBackend();
 
       if (streamDataRef.current && streamDataRef.current._id) {
-        await axios.patch(`${NEXT_PUBLIC_API_URL}/api/streams/${streamDataRef.current._id}/end`);
+        await markStream(streamDataRef);
       }
 
-      // Stop all tracks in the stream
       if (streamRef.current) {
-        streamRef.current.getTracks().forEach(track => track.stop());
+        streamRef.current.getTracks().forEach((t) => t.stop());
       }
 
-      // Clean up socket and peers
       if (socketRef.current) {
         socketRef.current.disconnect();
+        socketRef.current = null;
       }
 
-      peersRef.current.forEach(({ peer }) => {
-        peer.destroy();
-      });
+      peersRef.current.forEach(({ peer }) => peer.destroy());
+      peersRef.current = [];
 
       setIsStreaming(false);
       setStream(null);
@@ -479,16 +580,14 @@ const StreamStudio = () => {
       setPeers([]);
       setViewerCount(0);
       setCameraReady(false);
-
-      // Navigate to home if you have router
-      // router.push('/');
-
+      setVideoError(null);
     } catch (error) {
       console.error('Error stopping stream:', error);
       alert('Failed to end stream properly. Please try again.');
     }
   };
 
+  // JSX
   return (
     <div className="container mx-auto px-4">
       <h1 className="text-2xl font-bold mb-6">{isStreaming ? 'Live Stream' : 'Stream Studio'}</h1>
@@ -513,7 +612,7 @@ const StreamStudio = () => {
             <video
               ref={videoRef}
               id="cameraPreview"
-              autoPlay
+              autoPlay={false}
               playsInline
               muted
               style={{
@@ -561,7 +660,7 @@ const StreamStudio = () => {
             </div>
 
             <button
-              onClick={() => setIsStreaming(true)}
+              onClick={() => startStream()}
               className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-lg"
               disabled={!cameraReady || !title.trim()}
             >
@@ -584,7 +683,7 @@ const StreamStudio = () => {
               <div className="relative bg-black rounded-lg overflow-hidden aspect-video">
                 <video
                   ref={videoRef}
-                  autoPlay
+                  autoPlay={false}
                   muted
                   style={{
                     width: '100%',
@@ -609,12 +708,9 @@ const StreamStudio = () => {
                 <RtmpControls
                   socket={socketRef.current}
                   roomId={streamData?.roomId}
-                  setStreamData = {setStreamData}
-                  streamDataRef = {streamDataRef}
                   userId={hostId}
-                  title={title}
                   isHost={true}
-                  startStream = {startStream}
+                  startStream={startStream}
                 />
               </div>
 
@@ -629,7 +725,7 @@ const StreamStudio = () => {
             </div>
           </div>
 
-          <div className="bg-gray-800 rounded-lg">
+          <div className="bg-gray-800 rounded-lg p-4">
             <ChatPanel
               socket={socketRef.current}
               roomId={streamData?.roomId}

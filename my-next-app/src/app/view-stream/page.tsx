@@ -14,7 +14,7 @@ import { AspectRatio } from "@/src/components/ui/aspect-ratio";
 import { Loader2 } from "lucide-react";
 import ChatPanel from '../../components/ChatPanel';
 import RtmpControls from '../../components/RtmpControls';
-import { NEXT_PUBLIC_API_URL } from '@/src/utils/constants';
+import { NEXT_PUBLIC_API_BASE_URL, NEXT_PUBLIC_API_URL } from '@/src/utils/constants';
 import { useParams, useSearchParams } from 'next/navigation';
 
 const ViewStream = () => {
@@ -58,7 +58,7 @@ const ViewStream = () => {
     const fetchStreamInfo = async () => {
       try {
         // Find the stream by roomId
-        const response = await axios.get(`${API_URL}/api/streams?roomId=${roomId}`);
+        const response = await axios.get(`${API_URL}/streams?roomId=${roomId}`);
         if (response.data && response.data.length > 0) {
           setStreamInfo(response.data[0]);
           setHostId(response.data[0].hostId);
@@ -98,8 +98,8 @@ const ViewStream = () => {
 
     try {
       // Connect to socket server with API URL from environment variables
-      console.log("Connecting to socket server at:", API_URL);
-      socketRef.current = io(API_URL);
+      console.log("Connecting to socket server at:", NEXT_PUBLIC_API_BASE_URL);
+      socketRef.current = io(NEXT_PUBLIC_API_BASE_URL);
       
       // Register viewer ID with socket
       console.log("Registering viewer ID:", viewerId);
@@ -272,7 +272,7 @@ const ViewStream = () => {
     }
     
     // Re-fetch stream info, which will trigger the connection setup effect
-    axios.get(`${API_URL}/api/streams?roomId=${roomId}`)
+    axios.get(`${API_URL}/streams?roomId=${roomId}`)
       .then(response => {
         if (response.data && response.data.length > 0) {
           setStreamInfo(response.data[0]);

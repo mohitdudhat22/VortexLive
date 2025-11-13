@@ -61,16 +61,18 @@ export function buildRtmpArgsForDestination(rtmpUrl) {
     // Input (chunked WebM from MediaRecorder over stdin)
     '-fflags', '+genpts+discardcorrupt',
     '-use_wallclock_as_timestamps', '1',
-    '-thread_queue_size', '1024',
-    '-probesize', '5M',
-    '-analyzeduration', '5M',
+
+    // small-ish queue for bursts (increase if you have short bursts)
+    '-thread_queue_size', '2048',
+
+    // minimize probing/analysis for low latency (was 5M which causes big buffering)
+    '-probesize', '32k',
+    '-analyzeduration', '0',
+
     '-f', 'webm',
     '-i', 'pipe:0',
 
-    // Let ffmpeg auto-map (safer if audio sometimes missing)
-    // '-map', '0', // explicit map could be used if you prefer
-
-    // Video encoding
+    // video encoding
     '-c:v', 'libx264',
     '-preset', 'veryfast',
     '-tune', 'zerolatency',
@@ -83,15 +85,45 @@ export function buildRtmpArgsForDestination(rtmpUrl) {
     '-force_key_frames', 'expr:gte(t,n_forced*2)',
     '-r', '30',
 
-    // Audio encoding
+    // audio encoding
     '-c:a', 'aac',
     '-b:a', '128k',
     '-ar', '44100',
     '-ac', '2',
 
-    // Streaming
+    // flush packets ASAP and output to FLV for RTMP
     '-flush_packets', '1',
     '-f', 'flv',
     rtmpUrl
   ];
 }
+
+export function throttle(fn, delay) {
+  let lastCall = 0;
+  let timeoutId = null;
+  let lastArgs;
+  let lastThis;
+
+  return function (...args) {
+    const now = Date.now();
+    const remaining = delay - (now - lastCall);
+    lastArgs = args;
+    lastThis = this;
+
+    if (remaining <= 0) {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+        timeoutId = null;
+      }
+      lastCall = now;
+      fn.apply(lastThis, lastArgs);
+    } else if (!timeoutId) {
+      timeoutId = setTimeout(() => {
+        lastCall = Date.now();
+        timeoutId = null;
+        fn.apply(lastThis, lastArgs);
+      }, remaining);
+    }
+  };
+}
+

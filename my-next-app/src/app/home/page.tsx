@@ -13,7 +13,7 @@ const HomePage = () => {
   useEffect(() => {
     const fetchStreams = async () => {
       try {
-        const res = await axios.get(NEXT_PUBLIC_API_URL + '/api/streams');
+        const res = await axios.get(NEXT_PUBLIC_API_URL +'/streams');
         setStreams(res.data);
         setLoading(false);
       } catch (error) {

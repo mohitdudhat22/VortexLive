@@ -8,7 +8,6 @@ const ffmpegPath = require('@ffmpeg-installer/ffmpeg').path;
 router.post('/', async (req, res) => {
   try {
     const { title, hostId } = req.body;
-    
     const stream = new Stream({
       title,
       hostId,
