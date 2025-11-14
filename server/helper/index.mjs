@@ -126,4 +126,15 @@ export function throttle(fn, delay) {
     }
   };
 }
+// helper/index.mjs
+export function throttleAsync(fn, intervalMs = 30) {
+  let last = 0;
+  return async function (...args) {
+    const now = Date.now();
+    if (now - last < intervalMs) return;
+    last = now;
+    await fn(...args);
+  };
+}
+
 

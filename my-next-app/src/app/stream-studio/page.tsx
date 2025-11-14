@@ -22,6 +22,13 @@ const StreamStudio = () => {
   const [videoError, setVideoError] = useState(null);
   const [hostId, setHostId] = useState(null);
   const [isStreamingToBackend, setIsStreamingToBackend] = useState(false);
+  const [backpressureStatus, setBackpressureStatus] = useState({
+    isPaused: false,
+    pausedAt: null,
+    resumedAt: null
+  });
+  const pendingChunksRef = useRef([]);
+  const maxPendingChunks = 100; // Max chunks to buffer locally
 
   // refs
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -57,25 +64,25 @@ const StreamStudio = () => {
     }
   }, [hostId]);
 
-  // Helper: choose MediaRecorder options
-  function getMediaRecorderOptions({
-    videoBitsPerSecond = 200_000,
-    audioBitsPerSecond = 32_000,
-    codecs = ['video/webm;codecs=vp8,opus', 'video/webm;codecs=vp9,opus', 'video/webm']
-  } = {}) {
+  function getMediaRecorderOptions() {
+    const codecs = [
+      'video/webm;codecs=vp8,opus',
+      'video/webm;codecs=vp9,opus',
+      'video/webm'
+    ];
+
     const mimeType = codecs.find(t => {
       try {
         return MediaRecorder.isTypeSupported(t);
       } catch {
         return false;
       }
-    }) || codecs.at(-1);
+    }) || codecs[codecs.length - 1];
 
-    console.log('[MediaRecorder] Using codec:', mimeType);
     return {
       mimeType,
-      videoBitsPerSecond,
-      audioBitsPerSecond
+      videoBitsPerSecond: 200_000,  // 200 kbps for video (lowered)
+      audioBitsPerSecond: 32_000    // 32 kbps for audio
     };
   }
 
@@ -295,9 +302,17 @@ const StreamStudio = () => {
     if (!mediaStream) throw new Error('No media stream supplied');
     if (!window.MediaRecorder) throw new Error('MediaRecorder is not supported');
 
-    const options = getMediaRecorderOptions();
+    const options = {
+      mimeType: 'video/webm;codecs=vp8,opus',
+      videoBitsPerSecond: 200_000,  // Reduced from default
+      audioBitsPerSecond: 32_000
+    };
+
     let headerSent = false;
     let recorder;
+    let isPaused = false;
+    let pendingAcks = 0;
+    const maxPendingAcks = 3; // Max in-flight chunks
 
     try {
       recorder = new MediaRecorder(mediaStream, options);
@@ -305,48 +320,114 @@ const StreamStudio = () => {
       recorder.ondataavailable = async (event) => {
         if (!event.data || event.data.size === 0) return;
 
-        // convert to ArrayBuffer then to base64 (server expects base64)
-        const ab = await event.data.arrayBuffer();
-        const b64 = arrayBufferToBase64(ab);
-        const payload = { roomId: streamDataRef.current.roomId, data: b64, isHeader: !headerSent };
+        // If too many pending acks, pause recorder
+        if (pendingAcks >= maxPendingAcks && !isPaused) {
+          console.warn('Too many pending acks, pausing recorder');
+          recorder.pause();
+          isPaused = true;
+        }
 
-        // If header hasn't been sent, mark it and send without queue logic
+        // Convert to ArrayBuffer
+        const ab = await event.data.arrayBuffer();
+
+        // For better performance, send binary instead of base64
+        // Socket.io supports binary data natively
+        const payload = {
+          roomId: streamDataRef.current.roomId,
+          data: ab,  // Send as ArrayBuffer, not base64
+          isHeader: !headerSent
+        };
+
         if (!headerSent) {
           headerSent = true;
-          socket.emit('stream-data', payload, (ack) => {
-            // server may immediately request more; handle ack if returned
-            if (ack && ack.shouldContinue === false) {
-              pauseForBackpressure();
-            }
-          });
+          // Send header without ack handling
+          socket.emit('stream-data', payload);
           return;
         }
 
-        // Normal chunk: send with ack and apply backpressure logic
-        // If we're already paused due to backpressure, buffer locally (bounded)
-        if (pausedByBackpressure) {
-          // simple bounded buffer: we just drop if full (or you can stop recorder)
-          clientQueueBytes += b64.length * (3 / 4); // approx decode size
-          if (clientQueueBytes > MAX_CLIENT_QUEUE_BYTES) {
-            console.warn('Local send queue too large — stopping recorder to avoid memory blowup');
-            recorder.pause();
-            // optionally notify user
-          } else {
-            // store it in a local queue store if you want to retry later
-            localPendingChunks.push(payload); // create `localPendingChunks` array in outer scope
+        // Limit local buffer
+        if (pendingChunksRef.current.length >= maxPendingChunks) {
+          console.warn('Local buffer full, dropping oldest chunk');
+          pendingChunksRef.current.shift();
+        }
+
+        pendingChunksRef.current.push(payload);
+        sendNextChunk();
+      };
+
+      function sendNextChunk() {
+        if (pendingChunksRef.current.length === 0) {
+          // No more pending chunks, maybe resume recorder
+          if (isPaused && pendingAcks < maxPendingAcks) {
+            console.log('Resuming recorder');
+            recorder.resume();
+            isPaused = false;
+            setBackpressureStatus(prev => ({
+              ...prev,
+              isPaused: false,
+              resumedAt: Date.now()
+            }));
           }
           return;
         }
 
-        // Send with ack — server should reply { shouldContinue: true/false }
-        socket.emit('stream-data', payload, (ack) => {
-          if (!ack) return;
+        if (pendingAcks >= maxPendingAcks) {
+          // Too many in flight, wait
+          return;
+        }
+
+        const chunk = pendingChunksRef.current.shift();
+        pendingAcks++;
+
+        socket.emit('stream-data', chunk, (ack) => {
+          pendingAcks--;
+
+          if (!ack) {
+            // No ack received, assume we should continue
+            sendNextChunk();
+            return;
+          }
+
           if (ack.shouldContinue === false) {
-            // server is overwhelmed — pause recorder locally
-            pauseForBackpressure();
+            // Server says pause
+            console.warn('Server requested pause due to backpressure');
+            if (!isPaused) {
+              recorder.pause();
+              isPaused = true;
+              setBackpressureStatus({
+                isPaused: true,
+                pausedAt: Date.now(),
+                resumedAt: null
+              });
+            }
+
+            // Try to resume after a delay
+            setTimeout(() => {
+              socket.emit('can-resume', { roomId: streamDataRef.current.roomId }, (resp) => {
+                if (resp && resp.shouldResume) {
+                  console.log('Server says we can resume');
+                  if (isPaused && recorder.state === 'paused') {
+                    recorder.resume();
+                    isPaused = false;
+                    setBackpressureStatus(prev => ({
+                      ...prev,
+                      isPaused: false,
+                      resumedAt: Date.now()
+                    }));
+                  }
+                  sendNextChunk();
+                } else {
+                  // Try again later
+                  setTimeout(() => sendNextChunk(), 1000);
+                }
+              });
+            }, 500);
+          } else {
+            // Continue sending
+            sendNextChunk();
           }
         });
-      };
+      }
 
       recorder.onerror = (err) => {
         console.error('MediaRecorder error', err);
@@ -356,9 +437,12 @@ const StreamStudio = () => {
       recorder.onstop = () => {
         console.log('MediaRecorder stopped');
         setIsStreamingToBackend(false);
+        pendingChunksRef.current = [];
+        pendingAcks = 0;
       };
 
-      recorder.start(1000); // 1s slices
+      // Start with larger timeslice to reduce chunk rate
+      recorder.start(1000); // 1 second chunks
       mediaRecorderRef.current = recorder;
       setIsStreamingToBackend(true);
 
@@ -368,48 +452,8 @@ const StreamStudio = () => {
       setVideoError('Failed to start video streaming: ' + (err?.message || String(err)));
       throw err;
     }
-
-    // helpers inside same scope:
-    function pauseForBackpressure() {
-      if (pausedByBackpressure) return;
-      console.info('Pausing recorder due to server backpressure');
-      pausedByBackpressure = true;
-      try { recorder.pause(); } catch (e) { }
-      // set a timer to check back in X ms; server can also send explicit resume
-      resumeTimer = setTimeout(() => {
-        // Ask server for permission to resume (emit a "can-resume" event)
-        socket.emit('can-resume', { roomId: streamDataRef.current.roomId }, (resp) => {
-          if (resp && resp.shouldResume === true) {
-            resumeFromBackpressure();
-          } else {
-            // if still not ok, schedule another try with exponential backoff
-            // keep it simple here and try again in 1000ms
-            setTimeout(() => socket.emit('can-resume', { roomId: streamDataRef.current.roomId }, (r) => {
-              if (r?.shouldResume) resumeFromBackpressure();
-            }), 1000);
-          }
-        });
-      }, 500); // initial wait
-    }
-
-    function resumeFromBackpressure() {
-      if (!pausedByBackpressure) return;
-      console.info('Resuming recorder after backpressure cleared');
-      pausedByBackpressure = false;
-      try { recorder.resume(); } catch (e) { }
-      // flush localPendingChunks if you kept them
-      while (localPendingChunks.length && !pausedByBackpressure) {
-        const p = localPendingChunks.shift();
-        clientQueueBytes -= p.data.length * (3 / 4);
-        socket.emit('stream-data', p, (ack) => {
-          if (ack?.shouldContinue === false) {
-            pauseForBackpressure();
-          }
-        });
-      }
-      if (resumeTimer) { clearTimeout(resumeTimer); resumeTimer = null; }
-    }
   }, []);
+
 
   const stopStreamingToBackend = useCallback(() => {
     try {
@@ -734,6 +778,13 @@ const StreamStudio = () => {
               isHost={true}
             />
           </div>
+        </div>
+      )}
+      {backpressureStatus.isPaused && (
+        <div className="bg-yellow-600/20 border border-yellow-600 rounded p-2 mt-2">
+          <p className="text-yellow-200 text-sm">
+            ⚠️ Stream paused due to server backpressure. Waiting to resume...
+          </p>
         </div>
       )}
     </div>

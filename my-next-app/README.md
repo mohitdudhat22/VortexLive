@@ -39,13 +39,14 @@ Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/bui
 
 ## ⚙️ Tech Stack
 
-| Layer | Tech |
-|:------|:-----|
-| Frontend | WebRTC / MediaRecorder API |
-| Transport | Socket.IO (WebSocket under the hood) |
-| Backend | Node.js (Express + Socket.IO) |
-| Encoding / Push | FFmpeg (via child process) |
-| Targets | YouTube RTMP, Twitch RTMP, Facebook Live RTMP |
+| Layer           | Tech                                          |
+| :-------------- | :-------------------------------------------- |
+| Frontend        | WebRTC / MediaRecorder API                    |
+| Transport       | Socket.IO (WebSocket under the hood)          |
+| Backend         | Node.js (Express + Socket.IO)                 |
+| Encoding / Push | FFmpeg (via child process)                    |
+| Targets         | YouTube RTMP, Twitch RTMP, Facebook Live RTMP |
+
 Browser Camera
 ↓
 MediaRecorder (captures every 100 ms)
@@ -57,6 +58,7 @@ Backend (decodes base64 → Buffer)
 FFmpeg stdin (one process per platform)
 ↓
 YouTube / Twitch / Facebook RTMP servers
+
 ---
 
 ## 🚀 How It Works
@@ -68,11 +70,14 @@ The browser grabs audio/video with `getUserMedia` and periodically records short
 ```js
 const socket = io("https://your-server.com");
 
-navigator.mediaDevices.getUserMedia({ video: true, audio: true })
-  .then(stream => {
-    const recorder = new MediaRecorder(stream, { mimeType: "video/webm; codecs=vp8" });
+navigator.mediaDevices
+  .getUserMedia({ video: true, audio: true })
+  .then((stream) => {
+    const recorder = new MediaRecorder(stream, {
+      mimeType: "video/webm; codecs=vp8",
+    });
 
-    recorder.ondataavailable = e => {
+    recorder.ondataavailable = (e) => {
       const reader = new FileReader();
       reader.onload = () => {
         socket.emit("stream-data", reader.result.split(",")[1]); // base64 payload
@@ -82,4 +87,19 @@ navigator.mediaDevices.getUserMedia({ video: true, audio: true })
 
     recorder.start(100); // emit every 100ms
   });
+// Use binary (ArrayBuffer / Buffer) not base64 — base64 adds ~33% overhead.
 
+// Use a PassThrough or a proper Writable and pipe() to FFmpeg (Node streams handle backpressure).
+
+// On write() returning false:
+
+// Pause producers (emit a throttle to client), or
+
+// Start buffering with a bounded queue and apply a drop-oldest or drop-new policy.
+
+// On 'drain', resume: flush buffer or emit resume.
+
+// Monitor queue length; log and alert if it grows.
+
+// Consider lowering capture rate (bigger intervals), lowering bitrate, or using hardware encoding if CPU is the bottleneck.
+```
